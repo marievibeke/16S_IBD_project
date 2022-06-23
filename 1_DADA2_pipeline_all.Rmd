@@ -1,0 +1,1099 @@
+---
+title: "DADA2 pipeline"
+output:
+  github_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+## Read in packages
+```{r}
+library(ggplot2)
+library(dplyr)
+library(dada2)
+library(phyloseq)
+library(phangorn)
+
+packageVersion("ggplot2")
+packageVersion("dplyr")
+packageVersion("dada2")
+packageVersion("phyloseq")
+packageVersion("phangorn")
+
+meta_data <- read.csv(file = "./Metadata_IBD_full.txt", sep="\t")
+```
+
+Split in paired/single. Then split in illumina / the rest:
+```{r eval=FALSE, include=TRUE}
+meta_single <- meta_data %>% filter(LibraryLayout=="SINGLE")
+meta_paired <- meta_data %>% filter(LibraryLayout=="PAIRED")
+
+meta_single_illumina <- meta_single %>% filter(Instrument %in% c("Illumina MiSeq", "Illumina HiSeq 2000","Illumina HiSeq 2500", "Illumina HiSeq 4000","Illumina NovaSeq 6000"))
+meta_single_rest <- meta_single %>% filter(Instrument %in% c( "454 GS", "454 GS Junior", "454 GS FLX Titanium", "Ion Torrent PGM", "NextSeq 500"))
+
+meta_paired_illumina <- meta_paired %>% filter(Instrument %in% c("Illumina MiSeq", "Illumina HiSeq 2000","Illumina HiSeq 2500", "Illumina HiSeq 4000","Illumina NovaSeq 6000"))
+meta_paired_rest <- meta_paired %>% filter(Instrument %in% c( "454 GS", "454 GS Junior", "454 GS FLX Titanium", "Ion Torrent PGM", "NextSeq 500"))
+
+#Withdraw the projects
+single_illumina <- unique(meta_single_illumina$BioProject)
+single_rest <- unique(meta_single_rest$BioProject)
+
+paired_illumina <- unique(meta_paired_illumina$BioProject)
+paired_illumina <- paired_illumina[c(1:14, 16:29)]
+paired_rest <- unique(meta_paired_rest$BioProject)
+
+#Make a dataframe for each project
+for (i in single_illumina){
+  assign(paste0("meta_single_", i), meta_single_illumina %>% filter(BioProject==i))
+}
+for (i in single_rest){
+  assign(paste0("meta_single_", i), meta_single_rest %>% filter(BioProject==i))
+}
+for (i in paired_illumina){
+  assign(paste0("meta_paired_", i), meta_paired_illumina %>% filter(BioProject==i))
+}
+for (i in paired_rest){
+  assign(paste0("meta_paired_", i), meta_paired_rest %>% filter(BioProject==i))
+}
+
+
+#Overall terms:
+paired_projects <- c(paired_illumina, paired_rest)
+single_projects <- c(single_illumina, single_rest)
+```
+
+
+## Read in library with fastq-files
+```{r eval=FALSE, include=TRUE}
+for (i in single_projects){
+  assign(paste0("path_single_", i), paste0("./vol1/single/", i))
+}
+for (i in paired_projects){
+  assign(paste0("path_paired_", i), paste0("./vol1/paired/", i))
+}
+```
+
+## Filter and trim
+```{r eval=FALSE, include=TRUE}
+
+# Sort ensures forward/reverse reads are in same order
+for (i in paired_projects){
+  assign(paste0("fnFs_paired_", i),  sort(list.files(eval(parse(text=paste0("path_paired_", i))), pattern="_1.fastq.gz", full.names = T)))
+  assign(paste0("fnRs_paired_", i),  sort(list.files(eval(parse(text=paste0("path_paired_", i))), pattern="_2.fastq.gz", full.names = T)))
+}
+
+for (i in single_projects){
+  assign(paste0("fnFs_single_", i),  sort(list.files(eval(parse(text=paste0("path_single_", i))), pattern="_1.fastq.gz", full.names = T)))
+}
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+for (i in paired_projects){
+  assign(paste0("sample.names_paired_", i), sapply(strsplit(basename(eval(parse(text=paste0("fnFs_paired_", i)))), "_"), `[`, 1))
+}
+for (i in single_projects){
+  assign(paste0("sample.names_single_", i), sapply(strsplit(basename(eval(parse(text=paste0("fnFs_single_", i)))), "_"), `[`, 1))
+}
+
+# See quality:
+for (i in paired_projects){
+  print(i)
+  png(paste0("./vol1/paired/Paired_forward_QC_", i, ".png"))
+  print(plotQualityProfile(eval(parse(text=paste0("fnFs_paired_", i, "[1:2]")))))
+  dev.off()
+  
+  png(paste0("./vol1/paired/Paired_reverse_QC_", i, ".png"))
+  print(plotQualityProfile(eval(parse(text=paste0("fnRs_paired_", i, "[1:2]")))))
+  dev.off()
+}
+
+for (i in single_projects){
+  print(i)
+  png(paste0("./vol1/single/Single_forward_QC_", i, ".png"))
+  print(plotQualityProfile(eval(parse(text=paste0("fnFs_single_", i, "[1:2]")))))
+  dev.off()
+}
+
+```
+
+## Trim ends
+```{r eval=FALSE, include=TRUE}
+for (i in paired_projects){
+  assign(paste0("filtFs_paired_", i), file.path(eval(parse(text=paste0("path_paired_", i))), "filtered", paste0(eval(parse(text=paste0("sample.names_paired_", i))), "_F_filt.fastq.gz")))
+  assign(paste0("filtRs_paired_", i), file.path(eval(parse(text=paste0("path_paired_", i))), "filtered", paste0(eval(parse(text=paste0("sample.names_paired_", i))), "_R_filt.fastq.gz")))
+}
+names(filtFs_paired_PRJNA684584) <- sample.names_paired_PRJNA684584
+names(filtRs_paired_PRJNA684584) <- sample.names_paired_PRJNA684584
+names(filtFs_paired_PRJNA679275) <- sample.names_paired_PRJNA679275
+names(filtRs_paired_PRJNA679275) <- sample.names_paired_PRJNA679275
+names(filtFs_paired_PRJNA646271) <- sample.names_paired_PRJNA646271
+names(filtRs_paired_PRJNA646271) <- sample.names_paired_PRJNA646271
+names(filtFs_paired_PRJNA450340) <- sample.names_paired_PRJNA450340
+names(filtRs_paired_PRJNA450340) <- sample.names_paired_PRJNA450340
+names(filtFs_paired_PRJNA313074) <- sample.names_paired_PRJNA313074
+names(filtRs_paired_PRJNA313074) <- sample.names_paired_PRJNA313074
+names(filtFs_paired_PRJEB23261) <- sample.names_paired_PRJEB23261
+names(filtRs_paired_PRJEB23261) <- sample.names_paired_PRJEB23261
+names(filtFs_paired_PRJNA431126) <- sample.names_paired_PRJNA431126
+names(filtRs_paired_PRJNA431126) <- sample.names_paired_PRJNA431126
+names(filtFs_paired_PRJNA681685) <- sample.names_paired_PRJNA681685
+names(filtRs_paired_PRJNA681685) <- sample.names_paired_PRJNA681685
+names(filtFs_paired_PRJNA610934) <- sample.names_paired_PRJNA610934
+names(filtRs_paired_PRJNA610934) <- sample.names_paired_PRJNA610934
+names(filtFs_paired_PRJEB30521) <- sample.names_paired_PRJEB30521
+names(filtRs_paired_PRJEB30521) <- sample.names_paired_PRJEB30521
+names(filtFs_paired_PRJNA436359) <- sample.names_paired_PRJNA436359
+names(filtRs_paired_PRJNA436359) <- sample.names_paired_PRJNA436359
+names(filtFs_paired_PRJNA565903) <- sample.names_paired_PRJNA565903
+names(filtRs_paired_PRJNA565903) <- sample.names_paired_PRJNA565903
+names(filtFs_paired_PRJEB18780) <- sample.names_paired_PRJEB18780
+names(filtRs_paired_PRJEB18780) <- sample.names_paired_PRJEB18780
+names(filtFs_paired_PRJEB38969) <- sample.names_paired_PRJEB38969
+names(filtRs_paired_PRJEB38969) <- sample.names_paired_PRJEB38969
+names(filtFs_paired_PRJNA606913) <- sample.names_paired_PRJNA606913
+names(filtRs_paired_PRJNA606913) <- sample.names_paired_PRJNA606913
+names(filtFs_paired_PRJNA596333) <- sample.names_paired_PRJNA596333
+names(filtRs_paired_PRJNA596333) <- sample.names_paired_PRJNA596333
+names(filtFs_paired_PRJNA515212) <- sample.names_paired_PRJNA515212
+names(filtRs_paired_PRJNA515212) <- sample.names_paired_PRJNA515212
+names(filtFs_paired_PRJEB21819) <- sample.names_paired_PRJEB21819
+names(filtRs_paired_PRJEB21819) <- sample.names_paired_PRJEB21819
+names(filtFs_paired_PRJNA450540) <- sample.names_paired_PRJNA450540
+names(filtRs_paired_PRJNA450540) <- sample.names_paired_PRJNA450540
+names(filtFs_paired_PRJNA428898) <- sample.names_paired_PRJNA428898
+names(filtRs_paired_PRJNA428898) <- sample.names_paired_PRJNA428898
+names(filtFs_paired_PRJEB21593) <- sample.names_paired_PRJEB21593
+names(filtRs_paired_PRJEB21593) <- sample.names_paired_PRJEB21593
+names(filtFs_paired_PRJNA388210) <- sample.names_paired_PRJNA388210
+names(filtRs_paired_PRJNA388210) <- sample.names_paired_PRJNA388210
+names(filtFs_paired_PRJEB11841) <- sample.names_paired_PRJEB11841
+names(filtRs_paired_PRJEB11841) <- sample.names_paired_PRJEB11841
+names(filtFs_paired_PRJEB14084) <- sample.names_paired_PRJEB14084
+names(filtRs_paired_PRJEB14084) <- sample.names_paired_PRJEB14084
+names(filtFs_paired_PRJNA316059) <- sample.names_paired_PRJNA316059
+names(filtRs_paired_PRJNA316059) <- sample.names_paired_PRJNA316059
+names(filtFs_paired_PRJNA414072) <- sample.names_paired_PRJNA414072
+names(filtRs_paired_PRJNA414072) <- sample.names_paired_PRJNA414072
+names(filtFs_paired_PRJNA418765) <- sample.names_paired_PRJNA418765
+names(filtRs_paired_PRJNA418765) <- sample.names_paired_PRJNA418765
+names(filtFs_paired_PRJNA761255) <- sample.names_paired_PRJNA761255
+names(filtRs_paired_PRJNA761255) <- sample.names_paired_PRJNA761255
+names(filtFs_paired_PRJEB11419) <- sample.names_paired_PRJEB11419
+names(filtRs_paired_PRJEB11419) <- sample.names_paired_PRJEB11419
+
+for (i in single_projects){
+  assign(paste0("filtFs_single_", i), file.path(eval(parse(text=paste0("path_single_", i))), "filtered", paste0(eval(parse(text=paste0("sample.names_single_", i))), "_F_filt.fastq.gz")))
+
+}
+
+names(filtFs_single_PRJNA596546) <- sample.names_single_PRJNA596546
+names(filtFs_single_PRJNA324147) <- sample.names_single_PRJNA324147
+names(filtFs_single_PRJNA514452) <- sample.names_single_PRJNA514452
+names(filtFs_single_PRJNA422193) <- sample.names_single_PRJNA422193
+names(filtFs_single_PRJNA757573) <- sample.names_single_PRJNA757573
+names(filtFs_single_PRJNA368966) <- sample.names_single_PRJNA368966
+names(filtFs_single_PRJEB33031) <- sample.names_single_PRJEB33031
+names(filtFs_single_PRJNA380944) <- sample.names_single_PRJNA380944
+names(filtFs_single_PRJEB7772) <- sample.names_single_PRJEB7772
+names(filtFs_single_PRJNA316059) <- sample.names_single_PRJNA316059
+names(filtFs_single_PRJEB13680) <- sample.names_single_PRJEB13680
+names(filtFs_single_PRJEB33711) <- sample.names_single_PRJEB33711
+names(filtFs_single_PRJNA391149) <- sample.names_single_PRJNA391149
+names(filtFs_single_PRJDB4871) <- sample.names_single_PRJDB4871
+names(filtFs_single_PRJNA82111) <- sample.names_single_PRJNA82111
+names(filtFs_single_PRJNA603658) <- sample.names_single_PRJNA603658
+names(filtFs_single_PRJNA82109) <- sample.names_single_PRJNA82109
+names(filtFs_single_PRJEB11845) <- sample.names_single_PRJEB11845
+names(filtFs_single_PRJNA645883) <- sample.names_single_PRJNA645883
+names(filtFs_single_PRJEB20520) <- sample.names_single_PRJEB20520
+names(filtFs_single_PRJEB7166) <- sample.names_single_PRJEB7166
+names(filtFs_single_PRJEB3206) <- sample.names_single_PRJEB3206
+names(filtFs_single_PRJEB11419) <- sample.names_single_PRJEB11419
+
+#American Gut:
+out_single_PRJEB11419 <- filterAndTrim(fnFs_single_PRJEB11419, filtFs_single_PRJEB11419, truncLen=150, maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=10)
+head(out_single_PRJEB11419)
+#Some samples had no reads:
+exists <- file.exists(filtFs_single_PRJEB11419)
+filtFs_single_PRJEB11419 <- filtFs_single_PRJEB11419[exists]
+sample.names_single_PRJEB11419 <- sample.names_single_PRJEB11419[exists]
+
+out_paired_PRJEB11419 <- filterAndTrim(fnFs_paired_PRJEB11419, filtFs_paired_PRJEB11419,fnRs_paired_PRJEB11419, filtRs_paired_PRJEB11419, truncLen=c(240, 240), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=10)
+head(out_paired_PRJEB11419)
+
+#Single - Vall:
+out_single_PRJNA603658 <- filterAndTrim(fnFs_single_PRJNA603658, filtFs_single_PRJNA603658, truncLen=250, maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=20)
+head(out_single_PRJNA603658)
+
+#Single V3-V6:
+out_single_PRJNA596546 <- filterAndTrim(fnFs_single_PRJNA596546, filtFs_single_PRJNA596546, truncLen=280, maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJNA596546)
+#Some samples had no reads:
+exists <- file.exists(filtFs_single_PRJNA596546)
+filtFs_single_PRJNA596546 <- filtFs_single_PRJNA596546[exists]
+sample.names_single_PRJNA596546 <- sample.names_single_PRJNA596546[exists]
+
+#Single V3:
+out_single_PRJNA316059 <- filterAndTrim(fnFs_single_PRJNA316059, filtFs_single_PRJNA316059, truncLen=160, maxN=0, maxEE=5, truncQ=2, rm.phix=T, compress=T, multithread=T)
+head(out_single_PRJNA316059)
+
+#Single V3-V5:
+out_single_PRJNA82109 <- filterAndTrim(fnFs_single_PRJNA82109, filtFs_single_PRJNA82109, truncLen=400,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJNA82109) #So few reads!! :O
+out_single_PRJNA82111 <- filterAndTrim(fnFs_single_PRJNA82111, filtFs_single_PRJNA82111, truncLen=300,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJNA82111) #So few reads!! :O
+
+#Single V4-V5:
+out_single_PRJNA645883 <- filterAndTrim(fnFs_single_PRJNA645883, filtFs_single_PRJNA645883, truncLen=240,maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T)
+head(out_single_PRJNA645883)
+
+#Single V1-V2:
+out_single_PRJDB4871 <- filterAndTrim(fnFs_single_PRJDB4871, filtFs_single_PRJDB4871, truncLen=300,
+maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJDB4871) #So few reads!! :O
+
+#Single V1-V3:
+out_single_PRJEB33711 <- filterAndTrim(fnFs_single_PRJEB33711, filtFs_single_PRJEB33711, truncLen=360,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJEB33711)#So few reads!! :O
+out_single_PRJNA391149 <- filterAndTrim(fnFs_single_PRJNA391149, filtFs_single_PRJNA391149, truncLen=400,maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJNA391149)#So few reads!! :O
+#Some samples had no reads:
+exists <- file.exists(filtFs_single_PRJNA391149)
+filtFs_single_PRJNA391149 <- filtFs_single_PRJNA391149[exists]
+sample.names_single_PRJNA391149 <- sample.names_single_PRJNA391149[exists]
+out_single_PRJEB11845 <- filterAndTrim(fnFs_single_PRJEB11845, filtFs_single_PRJEB11845, truncLen=280,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 25)
+head(out_single_PRJEB11845)#So few reads!! :O
+out_single_PRJEB20520 <- filterAndTrim(fnFs_single_PRJEB20520, filtFs_single_PRJEB20520, truncLen=280,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJEB20520)#So few reads!! :O
+out_single_PRJEB3206 <- filterAndTrim(fnFs_single_PRJEB3206, filtFs_single_PRJEB3206, truncLen=280,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJEB3206)#So few reads!! :O
+out_single_PRJEB7166 <- filterAndTrim(fnFs_single_PRJEB7166, filtFs_single_PRJEB7166, truncLen=400,
+maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft = 15)
+head(out_single_PRJEB7166)#So few reads!! :O
+
+#Single V3-V4:
+out_single_PRJNA757573 <- filterAndTrim(fnFs_single_PRJNA757573, filtFs_single_PRJNA757573, truncLen=400,maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJNA757573)
+out_single_PRJEB33031 <- filterAndTrim(fnFs_single_PRJEB33031, filtFs_single_PRJEB33031, truncLen=280,
+maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJEB33031)
+out_single_PRJNA368966 <- filterAndTrim(fnFs_single_PRJNA368966, filtFs_single_PRJNA368966, truncLen=400,maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJNA368966)
+
+#Single V4:
+out_single_PRJNA324147 <- filterAndTrim(fnFs_single_PRJNA324147, filtFs_single_PRJNA324147, truncLen=100,maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJNA324147) #Very short reads?
+out_single_PRJNA514452 <- filterAndTrim(fnFs_single_PRJNA514452, filtFs_single_PRJNA514452, truncLen=150,maxN=0, maxEE=5, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJNA514452)
+out_single_PRJNA422193 <- filterAndTrim(fnFs_single_PRJNA422193, filtFs_single_PRJNA422193, truncLen=250,maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJNA422193)
+out_single_PRJEB7772 <- filterAndTrim(fnFs_single_PRJEB7772, filtFs_single_PRJEB7772, truncLen=230,
+maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJEB7772)
+
+#Paired - V3:
+out_paired_PRJNA316059 <- filterAndTrim(fnFs_paired_PRJNA316059, filtFs_paired_PRJNA316059, fnRs_paired_PRJNA316059, filtRs_paired_PRJNA316059, truncLen=c(150,150), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T)
+head(out_paired_PRJNA316059)
+out_paired_PRJNA596333 <- filterAndTrim(fnFs_paired_PRJNA596333, filtFs_paired_PRJNA596333, fnRs_paired_PRJNA596333, filtRs_paired_PRJNA596333, truncLen=c(290,200), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T)
+head(out_paired_PRJNA596333)
+
+#Paired V4V5:
+out_paired_PRJNA428898 <- filterAndTrim(fnFs_paired_PRJNA428898, filtFs_paired_PRJNA428898, fnRs_paired_PRJNA428898, filtRs_paired_PRJNA428898, truncLen=c(280,200), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T)
+head(out_paired_PRJNA428898)
+
+#Paired V1-V2:
+out_paired_PRJEB14084 <- filterAndTrim(fnFs_paired_PRJEB14084, filtFs_paired_PRJEB14084, fnRs_paired_PRJEB14084, filtRs_paired_PRJEB14084, truncLen=c(200,240), maxN=0, maxEE=c(5,2), truncQ=2, rm.phix=T, compress=T, multithread=T)
+head(out_paired_PRJEB14084)
+out_paired_PRJEB21593 <- filterAndTrim(fnFs_paired_PRJEB21593, filtFs_paired_PRJEB21593, fnRs_paired_PRJEB21593, filtRs_paired_PRJEB21593, truncLen=c(200,220), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB21593)
+
+#Paired V3-V4:
+out_paired_PRJNA679275 <- filterAndTrim(fnFs_paired_PRJNA679275, filtFs_paired_PRJNA679275, fnRs_paired_PRJNA679275, filtRs_paired_PRJNA679275, truncLen=c(200,200),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA679275)
+out_paired_PRJNA646271 <- filterAndTrim(fnFs_paired_PRJNA646271, filtFs_paired_PRJNA646271, fnRs_paired_PRJNA646271, filtRs_paired_PRJNA646271, truncLen=c(220,180),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA646271)
+out_paired_PRJNA681685 <- filterAndTrim(fnFs_paired_PRJNA681685, filtFs_paired_PRJNA681685, fnRs_paired_PRJNA681685, filtRs_paired_PRJNA681685, truncLen=c(290,220),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA681685)
+out_paired_PRJEB30521 <- filterAndTrim(fnFs_paired_PRJEB30521, filtFs_paired_PRJEB30521, fnRs_paired_PRJEB30521, filtRs_paired_PRJEB30521, truncLen=c(200,120),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB30521)
+out_paired_PRJNA565903 <- filterAndTrim(fnFs_paired_PRJNA565903, filtFs_paired_PRJNA565903, fnRs_paired_PRJNA565903, filtRs_paired_PRJNA565903, truncLen=c(200,150),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA565903)
+out_paired_PRJNA414072 <- filterAndTrim(fnFs_paired_PRJNA414072, filtFs_paired_PRJNA414072, fnRs_paired_PRJNA414072, filtRs_paired_PRJNA414072, truncLen=c(180,150),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA414072)
+out_paired_PRJNA606913 <- filterAndTrim(fnFs_paired_PRJNA606913, filtFs_paired_PRJNA606913, fnRs_paired_PRJNA606913, filtRs_paired_PRJNA606913, truncLen=c(240,240),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA606913)
+out_paired_PRJNA515212 <- filterAndTrim(fnFs_paired_PRJNA515212, filtFs_paired_PRJNA515212, fnRs_paired_PRJNA515212, filtRs_paired_PRJNA515212, truncLen=c(220,220),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA515212)
+out_paired_PRJEB21819 <- filterAndTrim(fnFs_paired_PRJEB21819, filtFs_paired_PRJEB21819, fnRs_paired_PRJEB21819, filtRs_paired_PRJEB21819, truncLen=c(180,180),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB21819)
+
+
+#Paired V4:
+out_paired_PRJNA684584 <- filterAndTrim(fnFs_paired_PRJNA684584, filtFs_paired_PRJNA684584, fnRs_paired_PRJNA684584, filtRs_paired_PRJNA684584, truncLen=c(200,200),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA684584)
+out_paired_PRJNA450340 <- filterAndTrim(fnFs_paired_PRJNA450340, filtFs_paired_PRJNA450340, fnRs_paired_PRJNA450340, filtRs_paired_PRJNA450340, truncLen=c(220,200),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA450340)
+out_paired_PRJNA313074 <- filterAndTrim(fnFs_paired_PRJNA313074, filtFs_paired_PRJNA313074, fnRs_paired_PRJNA313074, filtRs_paired_PRJNA313074, truncLen=c(200,120),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA313074)#PROBLEMS!!: different length, and different number of reads in forward and reverse
+out_paired_PRJEB23261 <- filterAndTrim(fnFs_paired_PRJEB23261, filtFs_paired_PRJEB23261, fnRs_paired_PRJEB23261, filtRs_paired_PRJEB23261, truncLen=c(220,220),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB23261)
+out_paired_PRJNA431126 <- filterAndTrim(fnFs_paired_PRJNA431126, filtFs_paired_PRJNA431126, fnRs_paired_PRJNA431126, filtRs_paired_PRJNA431126, truncLen=c(240,200),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA431126)
+out_paired_PRJNA610934 <- filterAndTrim(fnFs_paired_PRJNA610934, filtFs_paired_PRJNA610934, fnRs_paired_PRJNA610934, filtRs_paired_PRJNA610934, truncLen=c(180,180),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA610934)
+out_paired_PRJNA436359 <- filterAndTrim(fnFs_paired_PRJNA436359, filtFs_paired_PRJNA436359, fnRs_paired_PRJNA436359, filtRs_paired_PRJNA436359, truncLen=c(150,140),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA436359)
+#Some samples had no reads:
+exists <- file.exists(filtFs_paired_PRJNA436359)
+filtFs_paired_PRJNA436359 <- filtFs_paired_PRJNA436359[exists]
+filtRs_paired_PRJNA436359 <- filtRs_paired_PRJNA436359[exists]
+sample.names_paired_PRJNA436359 <- sample.names_paired_PRJNA436359[exists]
+out_paired_PRJEB18780 <- filterAndTrim(fnFs_paired_PRJEB18780, filtFs_paired_PRJEB18780, fnRs_paired_PRJEB18780, filtRs_paired_PRJEB18780, truncLen=c(190,190),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB18780)
+#Some samples had no reads:
+exists <- file.exists(filtFs_paired_PRJEB18780)
+filtFs_paired_PRJEB18780 <- filtFs_paired_PRJEB18780[exists]
+filtRs_paired_PRJEB18780 <- filtRs_paired_PRJEB18780[exists]
+sample.names_paired_PRJEB18780 <- sample.names_paired_PRJEB18780[exists]
+#-> single
+out_single_PRJEB13680 <- filterAndTrim(fnFs_single_PRJEB13680, filtFs_single_PRJEB13680, truncLen=150,maxN=0, maxEE=5, truncQ=2, rm.phix=T,compress=T, multithread=T)
+head(out_single_PRJEB13680)
+out_paired_PRJNA761255 <- filterAndTrim(fnFs_paired_PRJNA761255, filtFs_paired_PRJNA761255, fnRs_paired_PRJNA761255, filtRs_paired_PRJNA761255, truncLen=c(150,150),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA761255)
+out_paired_PRJEB38969 <- filterAndTrim(fnFs_paired_PRJEB38969, filtFs_paired_PRJEB38969, fnRs_paired_PRJEB38969, filtRs_paired_PRJEB38969, truncLen=c(220,220),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB38969)
+out_paired_PRJNA450540 <- filterAndTrim(fnFs_paired_PRJNA450540, filtFs_paired_PRJNA450540, fnRs_paired_PRJNA450540, filtRs_paired_PRJNA450540, truncLen=c(160,160),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA450540)
+out_paired_PRJNA418765 <- filterAndTrim(fnFs_paired_PRJNA418765, filtFs_paired_PRJNA418765, fnRs_paired_PRJNA418765, filtRs_paired_PRJNA418765, truncLen=c(220,220),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA418765)
+out_paired_PRJNA388210 <- filterAndTrim(fnFs_paired_PRJNA388210, filtFs_paired_PRJNA388210, fnRs_paired_PRJNA388210, filtRs_paired_PRJNA388210, truncLen=c(210,190),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(25,25))
+head(out_paired_PRJNA388210)
+out_paired_PRJEB11841 <- filterAndTrim(fnFs_paired_PRJEB11841, filtFs_paired_PRJEB11841, fnRs_paired_PRJEB11841, filtRs_paired_PRJEB11841, truncLen=c(200,200),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB11841)
+#-> single
+out_single_PRJNA380944 <- filterAndTrim(fnFs_single_PRJNA380944, filtFs_single_PRJNA380944, truncLen= 280,maxN=0, maxEE=5, truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = 25)
+head(out_single_PRJNA380944)
+
+
+```
+
+## Learn error rates
+```{r eval=FALSE, include=TRUE}
+
+#For paired-end:
+for (i in paired_projects){
+  assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+  assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+}
+
+#For single-end:
+for (i in single_projects){
+  assign(paste0("errF_single_", i), learnErrors(eval(parse(text=paste0("filtFs_single_", i))), multithread=T))
+}
+```
+
+## Sample inference
+```{r eval=FALSE, include=TRUE}
+
+getN <- function(x) sum(getUniques(x))
+
+# Sample inference and merger of paired-end reads, Illumina
+for (i in paired_illumina){
+  mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+# Construct sequence table and remove chimeras
+seqtab <- makeSequenceTable(mergers)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+
+#Evaluate the progress:
+track <- cbind(eval(parse(text=paste0("out_paired_", i))), sapply(mergers, getN), rowSums(seqtab))
+write.table(track, paste0("./vol1/paired/", i, "/track.rds"))
+}
+
+# Sample inference and merger of paired-end reads, rest
+for (i in paired_rest){
+  mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, HOMOPOLYMER_GAP_PENALTY=-1, BAND_SIZE=32)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, HOMOPOLYMER_GAP_PENALTY=-1, BAND_SIZE=32)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+# Construct sequence table and remove chimeras
+seqtab <- makeSequenceTable(mergers)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+
+#Evaluate the progress:
+track <- cbind(eval(parse(text=paste0("out_paired_", i))), sapply(mergers, getN), rowSums(seqtab))
+write.table(track, paste0("./vol1/paired/", i, "/track.rds"))
+}
+
+# Sample inference and merger of single-end reads, Illumina
+for (i in single_illumina){
+  mergers <- vector("list", length(eval(parse(text=paste0("sample.names_single_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_single_", i)))
+for(sam in eval(parse(text=paste0("sample.names_single_", i)))[3465:6809]) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_single_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_single_", i))), multithread=TRUE)
+    merger <- ddF
+    mergers[[sam]] <- merger
+}
+rm(derepF)
+# Construct sequence table and remove chimeras
+seqtab <- makeSequenceTable(mergers)
+saveRDS(seqtab, paste0("./vol1/single/", i, "/seqtab.rds"))
+
+#Evaluate the progress:
+track <- cbind(eval(parse(text=paste0("out_single_", i))), sapply(mergers, getN), rowSums(seqtab))
+write.table(track, paste0("./vol1/single/", i, "/track.rds"))
+}
+
+# Sample inference and merger of single-end reads, rest
+for (i in single_rest){
+  mergers <- vector("list", length(eval(parse(text=paste0("sample.names_single_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_single_", i)))
+for(sam in eval(parse(text=paste0("sample.names_single_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_single_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_single_", i))), multithread=TRUE, HOMOPOLYMER_GAP_PENALTY=-1, BAND_SIZE=32)
+    merger <- ddF
+    mergers[[sam]] <- merger
+}
+rm(derepF)
+# Construct sequence table and remove chimeras
+seqtab <- makeSequenceTable(mergers)
+saveRDS(seqtab, paste0("./vol1/single/", i, "/seqtab.rds"))
+
+#Evaluate the progress:
+track <- cbind(eval(parse(text=paste0("out_single_", i))), sapply(mergers, getN), rowSums(seqtab))
+write.table(track, paste0("./vol1/single/", i, "/track.rds"))
+}
+
+```
+
+## Remove chimeras
+```{r eval=FALSE, include=TRUE}
+# Remove chimeras
+
+#Paired-end:
+for (i in paired_projects){
+  seqtab <- readRDS(paste0("./vol1/paired/", i, "/seqtab.rds"))
+  seqtab_nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE)
+  print(i)
+  print(sum(seqtab_nochim)/sum(seqtab))
+  saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+  rm(seqtab, seqtab_nochim)
+}
+
+#Single-end:
+for (i in single_projects){
+  seqtab <- readRDS(paste0("./vol1/single/", i, "/seqtab.rds"))
+  seqtab_nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE)
+  print(i)
+  print(sum(seqtab_nochim)/sum(seqtab))
+  saveRDS(seqtab_nochim, paste0("./vol1/single/", i, "/seqtab_nochim.rds"))
+  rm(seqtab, seqtab_nochim)
+}
+
+```
+
+## Trouble shooting: 
+```{r eval=FALSE, include=TRUE}
+#Problems with project PRJNA313074
+#Chimera problems (<80%): PRJNA681685, PRJNA596333, PRJNA428898, PRJEB11841, PRJNA422193, PRJNA380944, PRJNA316059
+
+#Check the track:
+for (i in paired_projects[c(1:4, 6:28)]){
+  seqtab <- readRDS(paste0("./vol1/paired/", i, "/seqtab.rds"))
+  seqtab.nochim <- readRDS(paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+  track <- cbind(eval(parse(text=paste0("out_paired_", i))), rowSums(seqtab), rowSums(seqtab.nochim))
+  print(i)
+  print(head(track))
+  write.table(track, file=paste0("./vol1/paired/", i, "/DADA2_QC.txt"))
+} 
+
+for (i in single_projects){
+  seqtab <- readRDS(paste0("./vol1/single/", i, "/seqtab.rds"))
+  seqtab.nochim <- readRDS(paste0("./vol1/single/", i, "/seqtab_nochim.rds"))
+  track <- cbind(eval(parse(text=paste0("out_single_", i))), rowSums(seqtab), rowSums(seqtab.nochim))
+  print(i)
+  print(head(track))
+  write.table(track, file=paste0("./vol1/single/", i, "/DADA2_QC.txt"))
+} 
+
+#Track problems (besides chimera): PRJNA679275, PRJNA646271, PRJEB23261, PRJEB30521, PRJNA565903, PRJNA515212, PRJEB21819, (PRJEB21593), (PRJNA388210), (PRJEB14084), PRJNA414072, PRJNA761255, PRJNA368966
+
+#Refit the problems:
+#Single V3:
+out_single_PRJNA316059 <- filterAndTrim(fnFs_single_PRJNA316059, filtFs_single_PRJNA316059, truncLen=150, maxN=0, maxEE=5, truncQ=2, rm.phix=T, compress=T, multithread=T, trimLeft=15)
+head(out_single_PRJNA316059)
+i <- "PRJNA316059"
+assign(paste0("errF_single_", i), learnErrors(eval(parse(text=paste0("filtFs_single_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_single_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_single_", i)))
+for(sam in eval(parse(text=paste0("sample.names_single_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_single_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_single_", i))), multithread=TRUE, verbose=T)
+    merger <- ddF
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_single_PRJNA316059, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/single/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/single/", i, "/seqtab_nochim.rds"))
+
+
+#Single V3-V4:
+out_single_PRJNA368966 <- filterAndTrim(fnFs_single_PRJNA368966, filtFs_single_PRJNA368966, truncLen=380,maxN=0, maxEE=2, truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=T, trimLeft=15)
+head(out_single_PRJNA368966)
+i <- "PRJNA368966"
+assign(paste0("errF_single_", i), learnErrors(eval(parse(text=paste0("filtFs_single_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_single_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_single_", i)))
+for(sam in eval(parse(text=paste0("sample.names_single_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_single_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_single_", i))), multithread=TRUE, verbose=T)
+    merger <- ddF
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_single_PRJNA368966, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/single/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/single/", i, "/seqtab_nochim.rds"))
+
+#Paired - V3:
+out_paired_PRJNA316059 <- filterAndTrim(fnFs_paired_PRJNA316059, filtFs_paired_PRJNA316059, fnRs_paired_PRJNA316059, filtRs_paired_PRJNA316059, truncLen=c(160,160), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA316059)
+i <- "PRJNA316059"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA316059, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+
+out_paired_PRJNA596333 <- filterAndTrim(fnFs_paired_PRJNA596333, filtFs_paired_PRJNA596333, fnRs_paired_PRJNA596333, filtRs_paired_PRJNA596333, truncLen=c(290,240), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA596333)
+i <- "PRJNA596333"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA596333, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#Paired V4V5:
+out_paired_PRJNA428898 <- filterAndTrim(fnFs_paired_PRJNA428898, filtFs_paired_PRJNA428898, fnRs_paired_PRJNA428898, filtRs_paired_PRJNA428898, truncLen=c(280,230), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T)
+head(out_paired_PRJNA428898)
+i <- "PRJNA428898"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA428898, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#Paired V1-V2:
+out_paired_PRJEB14084 <- filterAndTrim(fnFs_paired_PRJEB14084, filtFs_paired_PRJEB14084, fnRs_paired_PRJEB14084, filtRs_paired_PRJEB14084, truncLen=c(220,250), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB14084)
+i <- "PRJEB14084"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJEB14084, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+
+out_paired_PRJEB21593 <- filterAndTrim(fnFs_paired_PRJEB21593, filtFs_paired_PRJEB21593, fnRs_paired_PRJEB21593, filtRs_paired_PRJEB21593, truncLen=c(220,240), maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T, compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJEB21593)
+i <- "PRJEB21593"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJEB21593, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#Paired V3-V4:
+out_paired_PRJNA679275 <- filterAndTrim(fnFs_paired_PRJNA679275, filtFs_paired_PRJNA679275, fnRs_paired_PRJNA679275, filtRs_paired_PRJNA679275, truncLen=c(240,240),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA679275)
+i <- "PRJNA679275"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA679275, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+out_paired_PRJNA646271 <- filterAndTrim(fnFs_paired_PRJNA646271, filtFs_paired_PRJNA646271, fnRs_paired_PRJNA646271, filtRs_paired_PRJNA646271, truncLen=c(250,240),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJNA646271)
+i <- "PRJNA646271"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA646271, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+out_paired_PRJNA681685 <- filterAndTrim(fnFs_paired_PRJNA681685, filtFs_paired_PRJNA681685, fnRs_paired_PRJNA681685, filtRs_paired_PRJNA681685, truncLen=c(290,240),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA681685)
+i <- "PRJNA681685"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA681685, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+out_paired_PRJEB30521 <- filterAndTrim(fnFs_paired_PRJEB30521, filtFs_paired_PRJEB30521, fnRs_paired_PRJEB30521, filtRs_paired_PRJEB30521, truncLen=c(240,240),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJEB30521)
+i <- "PRJEB30521"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJEB30521, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+
+out_paired_PRJNA565903 <- filterAndTrim(fnFs_paired_PRJNA565903, filtFs_paired_PRJNA565903, fnRs_paired_PRJNA565903, filtRs_paired_PRJNA565903, truncLen=c(240,240),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJNA565903)
+i <- "PRJNA565903"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA565903, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#This project has so low quality! Cannot trim to get many reads without merging is not possible..
+out_paired_PRJNA414072 <- filterAndTrim(fnFs_paired_PRJNA414072, filtFs_paired_PRJNA414072, fnRs_paired_PRJNA414072, filtRs_paired_PRJNA414072, truncLen=c(240,225),maxN=0, maxEE=c(10,10), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(25,25))
+head(out_paired_PRJNA414072)
+sum(out_paired_PRJNA414072[, 2]) / sum(out_paired_PRJNA414072[,1])
+i <- "PRJNA414072"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA414072, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#Poor quality!
+out_paired_PRJNA515212 <- filterAndTrim(fnFs_paired_PRJNA515212, filtFs_paired_PRJNA515212, fnRs_paired_PRJNA515212, filtRs_paired_PRJNA515212, truncLen=c(240,235),maxN=0, maxEE=c(6,6), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJNA515212)
+i <- "PRJNA515212"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA515212, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+out_paired_PRJEB21819 <- filterAndTrim(fnFs_paired_PRJEB21819, filtFs_paired_PRJEB21819, fnRs_paired_PRJEB21819, filtRs_paired_PRJEB21819, truncLen=c(240,240),maxN=0, maxEE=c(7,7), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJEB21819)
+i <- "PRJEB21819"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJEB21819, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#Paired V4:
+out_paired_PRJNA313074 <- filterAndTrim(fnFs_paired_PRJNA313074, filtFs_paired_PRJNA313074, fnRs_paired_PRJNA313074, filtRs_paired_PRJNA313074, truncLen=c(200,120),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(15,15))
+head(out_paired_PRJNA313074)#PROBLEMS!!: different length, and different number of reads in forward and reverse - will not be included!!
+
+out_paired_PRJEB23261 <- filterAndTrim(fnFs_paired_PRJEB23261, filtFs_paired_PRJEB23261, fnRs_paired_PRJEB23261, filtRs_paired_PRJEB23261, truncLen=c(235,235),maxN=0, maxEE=c(6,6), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJEB23261)
+i <- "PRJEB23261"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJEB23261, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+#The reads do not overlap - this project will be excluded.
+out_paired_PRJNA761255 <- filterAndTrim(fnFs_paired_PRJNA761255, filtFs_paired_PRJNA761255, fnRs_paired_PRJNA761255, filtRs_paired_PRJNA761255, truncLen=c(150,150),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(25,25))
+head(out_paired_PRJNA761255)
+i <- "PRJNA761255"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR, justConcatenate = T)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA761255, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+out_paired_PRJNA388210 <- filterAndTrim(fnFs_paired_PRJNA388210, filtFs_paired_PRJNA388210, fnRs_paired_PRJNA388210, filtRs_paired_PRJNA388210, truncLen=c(220,210),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(25,25))
+head(out_paired_PRJNA388210)
+i <- "PRJNA388210"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR, justConcatenate = T)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJNA388210, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+
+out_paired_PRJEB11841 <- filterAndTrim(fnFs_paired_PRJEB11841, filtFs_paired_PRJEB11841, fnRs_paired_PRJEB11841, filtRs_paired_PRJEB11841, truncLen=c(210,210),maxN=0, maxEE=c(5,5), truncQ=2, rm.phix=T,compress=T, multithread=T, trimLeft = c(20,20))
+head(out_paired_PRJEB11841)
+i <- "PRJEB11841"
+assign(paste0("errF_paired_", i), learnErrors(eval(parse(text=paste0("filtFs_paired_", i))), multithread=T))
+assign(paste0("errR_paired_", i), learnErrors(eval(parse(text=paste0("filtRs_paired_", i))), multithread=T))
+mergers <- vector("list", length(eval(parse(text=paste0("sample.names_paired_", i)))))
+  names(mergers) <- eval(parse(text=paste0("sample.names_paired_", i)))
+for(sam in eval(parse(text=paste0("sample.names_paired_", i)))) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(eval(parse(text=paste0("filtFs_paired_", i)))[[sam]])
+    ddF <- dada(derepF, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    derepR <- derepFastq(eval(parse(text=paste0("filtRs_paired_", i)))[[sam]])
+    ddR <- dada(derepR, err=eval(parse(text=paste0("errF_paired_", i))), multithread=TRUE, verbose=T)
+    merger <- mergePairs(ddF, derepF, ddR, derepR)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+seqtab <- makeSequenceTable(mergers)
+seqtab_nochim <-  removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, minFoldParentOverAbundance=8)
+print(sum(seqtab_nochim)/sum(seqtab))
+track <- cbind(out_paired_PRJEB11841, rowSums(seqtab), rowSums(seqtab_nochim))
+head(track)
+saveRDS(seqtab, paste0("./vol1/paired/", i, "/seqtab.rds"))
+saveRDS(seqtab_nochim, paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+```
+
+
+## Assign taxonomy and construct phyloseq object
+```{r eval=FALSE, include=TRUE}
+#Paired-end: (excluding the removed projects PRJNA761255, PRJNA313074)
+for (i in paired_projects){
+  seqtab <- readRDS(paste0("./vol1/paired/", i, "/seqtab_nochim.rds"))
+  taxa <- assignTaxonomy(seqtab, "./silva_nr99_v138.1_train_set.fa.gz", multithread=T, tryRC = T)
+  taxa_extension <- addSpecies(taxa, "./silva_species_assignment_v138.1.fa.gz")
+  
+  taxa.print2 <- taxa_extension # Removing sequence rownames for display only
+  rownames(taxa.print2) <- NULL
+  
+  sam <- eval(parse(text=paste0("meta_paired_", i)))
+  sam <- distinct(sam)
+  row.names(sam) <- sam$Run
+  ps <- phyloseq(otu_table(seqtab, taxa_are_rows=F), sample_data(sam), tax_table(taxa_extension))
+  
+  #Shorter names for ASVs:
+  dna <- Biostrings::DNAStringSet(taxa_names(ps))
+  names(dna) <- taxa_names(ps)
+  ps <- merge_phyloseq(ps, dna)
+  taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+
+  #Transforn into proportions:
+  ps.prop <- transform_sample_counts(ps, function(otu) otu/sum(otu))
+
+  #Save!:
+  saveRDS(ps, file = paste0("./vol1/paired/", i, "/ps_count.rds"))
+  saveRDS(ps.prop, file = paste0("./vol1/paired/", i, "/ps_relab.rds"))
+  
+  rm(seqtab, taxa, taxa_extension, ps, sam)
+}
+
+#Single-end:
+for (i in single_projects){
+  seqtab <- readRDS(paste0("./vol1/single/", i, "/seqtab_nochim.rds"))
+  taxa <- assignTaxonomy(seqtab, "./silva_nr99_v138.1_train_set.fa.gz", multithread=T, tryRC=T)
+  taxa_extension <- addSpecies(taxa, "./silva_species_assignment_v138.1.fa.gz")
+  
+  taxa.print2 <- taxa_extension # Removing sequence rownames for display only
+  rownames(taxa.print2) <- NULL
+  
+  sam <- eval(parse(text=paste0("meta_single_", i)))
+  row.names(sam) <- sam$Run
+  ps <- phyloseq(otu_table(seqtab, taxa_are_rows=F), sample_data(sam), tax_table(taxa_extension))
+  
+  #Shorter names for ASVs:
+  dna <- Biostrings::DNAStringSet(taxa_names(ps))
+  names(dna) <- taxa_names(ps)
+  ps <- merge_phyloseq(ps, dna)
+  taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+
+  #Transforn into proportions:
+  ps.prop <- transform_sample_counts(ps, function(otu) otu/sum(otu))
+
+  #Save!:
+  saveRDS(ps, file = paste0("./vol1/single/", i, "/ps_count_",i, ".rds"))
+  saveRDS(ps.prop, file = paste0("./vol1/single/", i, "/ps_relab_", i, ".rds"))
+  
+  rm(seqtab, taxa, taxa_extension, ps, sam)
+}
+
+```
