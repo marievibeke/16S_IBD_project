@@ -1,0 +1,1200 @@
+---
+title: "Machine Learning"
+output:
+  github_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+## Read in packages and data
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(phyloseq)
+library(ggpubr)
+library(randomForest)
+library(caret)
+library(glmnet)
+library(ROCR)
+
+packageVersion("tidyverse")
+packageVersion("ggplot2")
+packageVersion("dplyr")
+packageVersion("phyloseq")
+packageVersion("ggpubr")
+packageVersion("randomForest")
+packageVersion("caret")
+packageVersion("glmnet")
+packageVersion("ROCR")
+
+path <- "C:/Users/FX76TZ/OneDrive - Aalborg Universitet/Mikrobiom korrelation/"
+ps_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+```
+
+## Random Forest with balanced datasets:
+### Prepare a test and a validation dataset:
+```{r}
+#Reduce the number to be tested! 
+ps_sub <- subset_samples(ps_relab, !is.na(Disease))
+ps_sub <- subset_samples(ps_sub, !is.na(geo_loc_name_country))
+ps_sub <- subset_samples(ps_sub, !is.na(Host_Age))
+ps_sub <- subset_samples(ps_sub, !is.na(host_sex))
+
+genus <- as.data.frame(as.matrix(otu_table(ps_sub)))
+genus[1:5, 1:5]
+#Remove columns with no count in any sample:
+genus1 <- genus[,colSums(genus)!=0]
+
+#Remove columns, where the genus is present in less than 10% of the samples:
+sum(sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]>0.90)
+genus <- genus1[, sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]<0.90]
+
+ps_relab_reduced <- phyloseq(otu_table(genus, taxa_are_rows=F), sample_data(ps_sub), tax_table(ps_sub))
+
+#Balance datasets based on disease!
+meta_data <- as.data.frame(as.matrix(sample_data(ps_relab_reduced)))
+meta_CD <- meta_data %>% filter(Disease !="UC")
+meta_UC <- meta_data %>% filter(Disease !="CD")
+
+#Remove projects with 0 IBD cases or 0 HC:
+meta_CD %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), HC = sum(Disease == "HC"))
+meta_CD <- meta_CD %>% filter(!(BioProject %in% c("PRJDB4871", "PRJEB18780", "PRJEB33031", "PRJNA380944", "PRJNA418765", "PRJNA610934", "PRJNA679275")))
+
+set.seed(0)
+new_CD <- data.frame()
+for (i in unique(meta_CD$BioProject)){
+  sub_CD <- meta_CD %>% filter(BioProject==i) %>% filter(Disease == "CD")
+  sub_HC <- meta_CD %>% filter(BioProject==i) %>% filter(Disease == "HC")
+  if (nrow(sub_CD) == nrow(sub_HC)){
+    new_CD <- rbind(new_CD,sub_CD)
+    new_CD <- rbind(new_CD,sub_HC)
+  } else if (nrow(sub_CD) < nrow(sub_HC)){
+    sub_HC <- sample_n(sub_HC, nrow(sub_CD))
+    new_CD <- rbind(new_CD,sub_CD)
+    new_CD <- rbind(new_CD,sub_HC)
+  } else {
+    sub_CD <- sample_n(sub_CD, nrow(sub_HC))
+    new_CD <- rbind(new_CD,sub_CD)
+    new_CD <- rbind(new_CD,sub_HC)    
+  }
+}
+
+meta_UC %>% dplyr::group_by(BioProject) %>% summarize(UC = sum(Disease == "UC"), HC = sum(Disease == "HC"))
+meta_UC <- meta_UC %>% filter(!(BioProject %in% c("PRJEB18780", "PRJEB3206", "PRJEB7166", "PRJNA380944", "PRJNA515212", "PRJNA646271")))
+
+set.seed(0)
+new_UC <- data.frame()
+for (i in unique(meta_UC$BioProject)){
+  sub_UC <- meta_UC %>% filter(BioProject==i) %>% filter(Disease == "UC")
+  sub_HC <- meta_UC %>% filter(BioProject==i) %>% filter(Disease == "HC")
+  if (nrow(sub_UC) == nrow(sub_HC)){
+    new_UC <- rbind(new_UC,sub_UC)
+    new_UC <- rbind(new_UC,sub_HC)
+  } else if (nrow(sub_UC) < nrow(sub_HC)){
+    sub_HC <- sample_n(sub_HC, nrow(sub_UC))
+    new_UC <- rbind(new_UC,sub_UC)
+    new_UC <- rbind(new_UC,sub_HC)
+  } else {
+    sub_UC <- sample_n(sub_UC, nrow(sub_HC))
+    new_UC <- rbind(new_UC,sub_UC)
+    new_UC <- rbind(new_UC,sub_HC)  
+  }
+}
+
+ps_CD <- subset_samples(ps_relab_reduced, Run %in% new_CD$Run)
+ps_UC <- subset_samples(ps_relab_reduced, Run %in% new_UC$Run)
+
+#Split dataset randomly:
+otu <- as.data.frame(as.matrix(otu_table(ps_CD)))
+meta <- sample_data(ps_CD)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, geo_loc_name_country_continent, Instrument, LibraryLayout, X16s_region, Host_Age, host_sex, N)
+df_CD <- cbind(otu, meta)
+df_CD$N <- as.numeric(df_CD$N)
+df_CD$Host_Age <- as.numeric(df_CD$Host_Age)
+
+otu <- as.data.frame(as.matrix(otu_table(ps_UC)))
+meta <- sample_data(ps_UC)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, geo_loc_name_country_continent, Instrument, LibraryLayout, X16s_region, Host_Age, host_sex, N)
+df_UC <- cbind(otu, meta)
+df_UC$N <- as.numeric(df_UC$N)
+df_UC$Host_Age <- as.numeric(df_UC$Host_Age)
+
+set.seed(0)
+ind <- sample(2, nrow(df_CD), replace = TRUE, prob = c(0.7, 0.3))
+train_CD <- df_CD[ind==1,]
+test_CD <- df_CD[ind==2,]
+
+set.seed(0)
+ind <- sample(2, nrow(df_UC), replace = TRUE, prob = c(0.7, 0.3))
+train_UC <- df_UC[ind==1,]
+test_UC <- df_UC[ind==2,]
+```
+
+### Random Forest:
+```{r}
+## Start with CD:
+
+#Baseline model with default settings:
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+
+#Search for best mtry and ntree:
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+# train model
+tunegrid <- expand.grid(.mtry=c(15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom <- train(Disease~., data=train_CD, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(40, 45, 50, 55, 60, 65, 70, 75), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom1 <- train(Disease~., data=train_CD, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom1$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(80, 90, 100, 110, 120, 130, 140, 150), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom2 <- train(Disease~., data=train_CD, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom2$results$Accuracy
+
+#Last grid search  - finer!:
+tunegrid <- expand.grid(.mtry=seq(from =74, to = 96, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom3 <- train(Disease~., data=train_CD, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom3$results$Accuracy
+
+#Results from grid search:
+df <- data.frame(mtry = c(rep(15,4), rep(20,4), rep(25,4), rep(30,4), rep(35,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),5)), Accuracy = c(0.7314203, 0.7342536, 0.7370314, 0.7230821, 0.7355314, 0.7343647, 0.7314758, 0.7313599, 0.7327488, 0.7271932, 0.7258599, 0.7245266, 0.7244710, 0.7285266, 0.7285821, 0.7259155, 0.7355821, 0.7341377, 0.7326932, 0.7245266))
+
+df1 <- data.frame(mtry = c(rep(40,4), rep(45,4), rep(50,4), rep(55,4), rep(60,4), rep(65,4), rep(70,4), rep(75,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.7327488, 0.7285821, 0.7326932, 0.7341932, 0.7368599, 0.7340821, 0.7383599, 0.7314155, 0.7383043, 0.7383043, 0.7314710, 0.7313599, 0.7341377, 0.7368599, 0.7272488, 0.7369155, 0.7328043, 0.7285821, 0.7244710, 0.7368599, 0.7300266, 0.7341377, 0.7369710, 0.7299710, 0.7313599, 0.7383043, 0.7383043, 0.7327488, 0.7383043, 0.7327488, 0.7369710, 0.7396932))
+
+df2 <- data.frame(mtry = c(rep(80,4), rep(90,4), rep(100,4), rep(110,4), rep(120,4), rep(130,4), rep(140,4), rep(150,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.7382488, 0.7369710, 0.7327488, 0.7299710, 0.7424155, 0.7410821, 0.7368599, 0.7369155, 0.7313599, 0.7368599, 0.7355266, 0.7340821, 0.7383043, 0.7383043, 0.7299710, 0.7326932, 0.7340821, 0.7313043, 0.7368599, 0.7326377, 0.7355821, 0.7395821, 0.7354710, 0.7354155, 0.7368599, 0.7340821, 0.7368043, 0.7340821, 0.7382488, 0.7326932, 0.7354710, 0.7368599))
+
+df3 <- data.frame(mtry = c(rep(74, 8), rep(76, 8), rep(78, 8), rep(80, 8), rep(82, 8), rep(84, 8), rep(86, 8), rep(88, 8), rep(90, 8), rep(92, 8), rep(94, 8), rep(96, 8)), ntree = as.factor(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 12)), Accuracy = c(0.7314710, 0.7314155, 0.7396932, 0.7326932, 0.7342488, 0.7383043, 0.7341377, 0.7382488, 0.7395821, 0.7354710, 0.7369155, 0.7327488, 0.7341377, 0.7382488, 0.7383043, 0.7369155, 0.7368599, 0.7355266, 0.7299710, 0.7285821, 0.7300266, 0.7341377, 0.7328043, 0.7382488, 0.7273599, 0.7465821, 0.7340821, 0.7383043, 0.7368599, 0.7355266, 0.7369155, 0.7355266, 0.7327488, 0.7396932, 0.7396932, 0.7355821, 0.7383043, 0.7341377, 0.7327488, 0.7328043, 0.7355266, 0.7383043, 0.7327488, 0.7341377, 0.7396932, 0.7354710, 0.7396932, 0.7355266, 0.7383043, 0.7341932, 0.7355266, 0.7341377, 0.7369155, 0.7313599, 0.7327488, 0.7341377, 0.7313599, 0.7341377, 0.7369155, 0.7314155, 0.7395821, 0.7424155, 0.7340821, 0.7341377, 0.7369155, 0.7328043, 0.7383043, 0.7368599, 0.7396932, 0.7355266, 0.7369155, 0.7383043, 0.7383043, 0.7424155, 0.7410266, 0.7410266, 0.7438043, 0.7327488, 0.7409155, 0.7383043, 0.7383043, 0.7299155, 0.7369155, 0.7326932, 0.7299710, 0.7368043, 0.7327488, 0.7368599, 0.7424710, 0.7354155, 0.7327488, 0.7313043, 0.7299155, 0.7368599, 0.7424155, 0.7313599))
+
+df <- rbind(df, df1, df2)
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 74, linetype = "dashed")+geom_vline(xintercept = 96, linetype = "dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df3)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df3[which.max(df3$Accuracy),]
+
+best_mtry <- 80
+best_ntree <- 1000
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(train_CD)
+colnames(train_CD) <- paste0("col_", seq(ncol(train_CD))) 
+train_CD$col_145 <- as.factor(train_CD$col_145)
+rf <- randomForest(col_145~., data=train_CD, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+
+#Prediction and confusion matrix - training data:
+p1 <- predict(rf, train_CD)
+confusionMatrix(p1, train_CD$col_145)
+
+#Prediction and confusion matrix - test data:
+colnames(test_CD) <- paste0("col_", seq(ncol(test_CD))) 
+test_CD$col_145 <- as.factor(test_CD$col_145)
+p2 <- predict(rf, test_CD)
+confusionMatrix(p2, test_CD$col_145)
+
+#Number of nodes and variable importance:
+hist(treesize(rf),
+     main = "No. of Nodes for the Trees",
+     col = "green")
+
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_CD <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:152)]
+imp_CD$bugs <- old_colnames
+
+best10_CD <- imp_CD[order(-imp_CD$MeanDecreaseGini),]
+best10_CD <- best10_CD[1:10,]
+
+# Model accuracy
+observed.classes <- test_CD$col_145
+accuracy <- mean(p2 == observed.classes) # 0.7731959
+
+res_CD <- data.frame(p2, observed.classes)
+res_CD <- res_CD %>% mutate(type = ifelse(p2=="CD" & observed.classes=="CD", "TP", ifelse(p2=="CD" & observed.classes=="HC", "FP", ifelse(p2=="HC" & observed.classes=="CD", "FN", "TN"))))
+
+precision <- sum(res_CD$type=="TP") / (sum(res_CD$type=="FP") + sum(res_CD$type=="TP")) #Pr(disease|positive)
+sensitivity <- sum(res_CD$type=="TP") / (sum(res_CD$type=="TP") + sum(res_CD$type=="FN")) #Pr(positive|disease)
+specificity <- sum(res_CD$type=="TN") / (sum(res_CD$type=="TN") + sum(res_CD$type=="FP")) #Pr(negative|no disease)
+
+accuracy #0.7731959
+precision #0.7659574
+sensitivity #0.7659574
+specificity #0.78
+
+#Make ROC curve:
+predictions <- as.data.frame(predict(rf, test_CD, type = "prob"))
+obs <- ifelse(observed.classes=="HC", 0, 1)
+pred <- prediction(predictions$CD, obs)
+perf <- performance(pred,"tpr","fpr")
+
+plot(perf,colorize=FALSE, col="black", main="Crohn's disease: Random Forest")
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+auc_ROCR <- performance(pred, measure = "auc")
+auc_ROCR <- auc_ROCR@y.values[[1]] #0.8776596
+
+###########################################################################################################################
+#UC:
+#Baseline model with default settings:
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+
+#Search for best mtry and ntree:
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+# train model
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+tunegrid <- expand.grid(.mtry=c(1, 5, 10, 15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom_UC <- train(Disease~., data=train_UC, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom_UC$results$Accuracy
+
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+tunegrid <- expand.grid(.mtry=c(40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom_UC1 <- train(Disease~., data=train_UC, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom_UC1$results$Accuracy
+
+#Make a finer grid search:
+tunegrid <- expand.grid(.mtry=seq(from =4, to = 30, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom_UC2 <- train(Disease~., data=train_UC, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom_UC2$results$Accuracy
+
+#The results from the grid search:
+df <- data.frame(mtry = c(rep(1, 4), rep(5, 4), rep(10, 4), rep(15, 4), rep(20, 4), rep(25, 4), rep(30, 4), rep(35, 4)), ntree = as.factor(rep(c(1000, 1500, 2000, 2500), 8)), Accuracy = c(0.6602582, 0.6638296, 0.6599997, 0.6590145, 0.6883689, 0.6874308, 0.6933954, 0.6932600, 0.6909293, 0.6896476, 0.6883720, 0.6932251, 0.6908913, 0.6893541, 0.6896065, 0.6946299, 0.6885483, 0.6872256, 0.6826720, 0.6862495, 0.6882518, 0.6835660, 0.6884632, 0.6873107, 0.6836100, 0.6919966, 0.6885514, 0.6859971, 0.6860822, 0.6791887, 0.6825458, 0.6897008))
+
+df1 <- data.frame(mtry = c(rep(40, 4), rep(50, 4), rep(60, 4), rep(70, 4), rep(80, 4), rep(90, 4), rep(100, 4), rep(110, 4), rep(120, 4), rep(130, 4), rep(140, 4), rep(150, 4)), ntree = as.factor(rep(c(1000, 1500, 2000, 2500), 12)), Accuracy = c(0.6922079, 0.6814055, 0.6802560, 0.6921258, 0.6826400, 0.6862115, 0.6826339, 0.6802530, 0.6799124, 0.6789363, 0.6873639, 0.6822554, 0.6778249, 0.6825138, 0.6740832, 0.6849358, 0.6790595, 0.6802530, 0.6764702, 0.6743386, 0.6730630, 0.6693593, 0.6742124, 0.6728897, 0.6848917, 0.6754880, 0.6813173, 0.6802150, 0.6766375, 0.6802530, 0.6728076, 0.6743417, 0.6814936, 0.6779602, 0.6790625, 0.6755291, 0.6790184, 0.6741683, 0.6695737, 0.6731481, 0.6728927, 0.6743797, 0.6754880, 0.6766375, 0.6752737, 0.6731481, 0.6754470, 0.6778310))
+
+df2 <- data.frame(mtry = c(rep(4, 8), rep(6, 8), rep(8, 8), rep(10, 8), rep(12, 8), rep(14, 8), rep(16, 8), rep(18, 8), rep(20, 8), rep(22, 8), rep(24, 8), rep(26, 8), rep(28, 8), rep(30, 8)), ntree = as.factor(c(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 14))), Accuracy = c(0.6857705, 0.6884951, 0.6825017, 0.6801998, 0.6848446, 0.6919403, 0.6839476, 0.6871343, 0.6828392, 0.6931779, 0.6944156, 0.6825017, 0.6858146, 0.6873928, 0.6846682, 0.6882458, 0.6885833, 0.6944186, 0.6872225, 0.6849237, 0.6894362, 0.6884130, 0.6909262, 0.6895183, 0.6859849, 0.6872636, 0.6872666, 0.6870994, 0.6967995, 0.6861582, 0.6919434, 0.6871845, 0.6810968, 0.6898619, 0.6861613, 0.6848416, 0.6871374, 0.6920346, 0.6908821, 0.6910965, 0.6861613, 0.6933543, 0.6838594, 0.6946269, 0.6955650, 0.6945448, 0.6861202, 0.6848857, 0.6896917, 0.6896947, 0.6838655, 0.6978258, 0.6933513, 0.6861172, 0.6849678, 0.6837803, 0.6907559, 0.6933133, 0.6872666, 0.6863316, 0.6861643, 0.6932220, 0.6872286, 0.6897798, 0.6816077, 0.6837393, 0.6884221, 0.6859469, 0.6910935, 0.6873989, 0.6894834, 0.6860761, 0.6849708, 0.6767637, 0.6837773, 0.6859119, 0.6848857, 0.6860792, 0.6908441, 0.6956532, 0.6946299, 0.6919936, 0.6907210, 0.6872697, 0.6861643, 0.6871845, 0.6979961, 0.6956532, 0.6871876, 0.6824196, 0.6887156, 0.6898270, 0.6932753, 0.6873609, 0.6908031, 0.6860822, 0.6850179, 0.6862525, 0.6873138, 0.6851031, 0.6898619, 0.6837393, 0.6907179, 0.6887597, 0.6872697, 0.6861233, 0.6885514, 0.6896537, 0.6861263, 0.6897388, 0.6847625, 0.6955711))
+
+df <-rbind(df, df1) 
+
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 4, linetype="dashed")+geom_vline(xintercept = 30, linetype="dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df2)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df2[which.max(df2$Accuracy),]
+
+#Best settings:
+best_mtry <- 24
+best_ntree <- 2250
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(train_UC)
+colnames(train_UC) <- paste0("col_", seq(ncol(train_UC))) 
+train_UC$col_145 <- as.factor(train_UC$col_145)
+rf <- randomForest(col_145~., data=train_UC, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+
+#Prediction and confusion matrix - training data:
+p1 <- predict(rf, train_UC)
+confusionMatrix(p1, train_UC$col_145)
+
+#Prediction and confusion matrix - test data:
+colnames(test_UC) <- paste0("col_", seq(ncol(test_UC))) 
+test_UC$col_145 <- as.factor(test_UC$col_145)
+p2 <- predict(rf, test_UC)
+confusionMatrix(p2, test_UC$col_145)
+
+#Number of nodes and variable importance:
+hist(treesize(rf),
+     main = "No. of Nodes for the Trees",
+     col = "green")
+
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_UC <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:152)]
+imp_UC$bugs <- old_colnames
+
+best10_UC <- imp_UC[order(-imp_UC$MeanDecreaseGini),]
+best10_UC <- best10_UC[1:10,]
+
+# Model accuracy
+observed.classes <- test_UC$col_145
+accuracy <- mean(p2 == observed.classes) # 0.6725664
+
+res_UC <- data.frame(p2, observed.classes)
+res_UC <- res_UC %>% mutate(type = ifelse(p2=="UC" & observed.classes=="UC", "TP", ifelse(p2=="UC" & observed.classes=="HC", "FP", ifelse(p2=="HC" & observed.classes=="UC", "FN", "TN"))))
+
+precision <- sum(res_UC$type=="TP") / (sum(res_UC$type=="FP") + sum(res_UC$type=="TP")) #Pr(disease|positive)
+sensitivity <- sum(res_UC$type=="TP") / (sum(res_UC$type=="TP") + sum(res_UC$type=="FN")) #Pr(positive|disease)
+specificity <- sum(res_UC$type=="TN") / (sum(res_UC$type=="TN") + sum(res_UC$type=="FP")) #Pr(negative|no disease)
+
+accuracy #0.6725664
+precision #0.74
+sensitivity #0.6065574
+specificity #0.75
+
+#Make ROC curve:
+predictions <- as.data.frame(predict(rf, test_UC, type = "prob"))
+obs <- ifelse(observed.classes=="HC", 0, 1)
+pred <- prediction(predictions$UC, obs)
+perf <- performance(pred,"tpr","fpr")
+
+plot(perf,colorize=FALSE, col="black", main="Ulcerative colitis: Random Forest")
+lines(c(0,1),c(0,1),col = "gray", lty = 4 )
+
+auc_ROCR <- performance(pred, measure = "auc")
+auc_ROCR <- auc_ROCR@y.values[[1]] #0.7643443
+```
+
+## CD vs. UC:
+### Prepare a test and a validation dataset:
+```{r}
+#Reduce the number to be tested! 
+ps_sub <- subset_samples(ps_relab, !is.na(Disease))
+ps_sub <- subset_samples(ps_sub, !is.na(geo_loc_name_country))
+ps_sub <- subset_samples(ps_sub, !is.na(Host_Age))
+ps_sub <- subset_samples(ps_sub, !is.na(host_sex))
+
+genus <- as.data.frame(as.matrix(otu_table(ps_sub)))
+genus[1:5, 1:5]
+#Remove columns with no count in any sample:
+genus1 <- genus[,colSums(genus)!=0]
+
+#Remove columns, where the genus is present in less than 10% of the samples:
+sum(sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]>0.90)
+genus <- genus1[, sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]<0.90]
+
+ps_relab_reduced <- phyloseq(otu_table(genus, taxa_are_rows=F), sample_data(ps_sub), tax_table(ps_sub))
+
+#Balance datasets based on disease!
+meta_data <- as.data.frame(as.matrix(sample_data(ps_relab_reduced)))
+meta <- meta_data %>% filter(Disease !="HC")
+
+#Remove projects with 0 IBD cases or 0 HC:
+meta %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), UC = sum(Disease == "UC"))
+meta <- meta %>% filter(BioProject %in% c("PRJEB11419", "PRJEB13680", "PRJEB33711", "PRJNA380944", "PRJNA391149", "PRJNA450340", "PRJNA757573"))
+
+set.seed(0)
+new_meta <- data.frame()
+for (i in unique(meta$BioProject)){
+  sub_CD <- meta %>% filter(BioProject==i) %>% filter(Disease == "CD")
+  sub_UC <- meta %>% filter(BioProject==i) %>% filter(Disease == "UC")
+  if (nrow(sub_CD) == nrow(sub_UC)){
+    new_meta <- rbind(new_meta,sub_CD)
+    new_meta <- rbind(new_meta,sub_UC)
+  } else if (nrow(sub_CD) < nrow(sub_UC)){
+    sub_UC <- sample_n(sub_UC, nrow(sub_CD))
+    new_meta <- rbind(new_meta,sub_CD)
+    new_meta <- rbind(new_meta,sub_UC)
+  } else {
+    sub_CD <- sample_n(sub_CD, nrow(sub_UC))
+    new_meta <- rbind(new_meta,sub_CD)
+    new_meta <- rbind(new_meta,sub_UC)   
+  }
+}
+
+ps_new <- subset_samples(ps_relab_reduced, Run %in% new_meta$Run)
+
+#Split dataset randomly:
+otu <- as.data.frame(as.matrix(otu_table(ps_new)))
+meta <- sample_data(ps_new)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, geo_loc_name_country_continent, Instrument, LibraryLayout, X16s_region, Host_Age, host_sex, N)
+df_new <- cbind(otu, meta)
+df_new$N <- as.numeric(df_new$N)
+df_new$Host_Age <- as.numeric(df_new$Host_Age)
+
+set.seed(0)
+ind <- sample(2, nrow(df_new), replace = TRUE, prob = c(0.7, 0.3))
+train_new <- df_new[ind==1,]
+test_new <- df_new[ind==2,]
+```
+
+### Random Forest:
+```{r}
+## Start with CD:
+
+#Baseline model with default settings:
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+
+#Search for best mtry and ntree:
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+# train model
+tunegrid <- expand.grid(.mtry=c(15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom <- train(Disease~., data=train_new, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(40, 45, 50, 55, 60, 65, 70, 75), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom1 <- train(Disease~., data=train_new, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom1$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(80, 90, 100, 110, 120, 130, 140, 150), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom2 <- train(Disease~., data=train_new, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom2$results$Accuracy
+
+#Last grid search  - finer!:
+tunegrid <- expand.grid(.mtry=seq(from =2, to = 42, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom3 <- train(Disease~., data=train_new, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom3$results$Accuracy
+
+#Results from grid search:
+df <- data.frame(mtry = c(rep(15,4), rep(20,4), rep(25,4), rep(30,4), rep(35,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),5)), Accuracy = c(0.6532749, 0.6341520, 0.6273099, 0.6378363, 0.6326608, 0.6359162, 0.6259064, 0.6414327, 0.6432846, 0.6462573, 0.6346784, 0.6362671, 0.6397661, 0.6306433, 0.6361696, 0.6380117, 0.6326608, 0.6379240, 0.6273977, 0.6362573))
+
+df1 <- data.frame(mtry = c(rep(40,4), rep(45,4), rep(50,4), rep(55,4), rep(60,4), rep(65,4), rep(70,4), rep(75,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.6482846, 0.6295127, 0.6293275, 0.6347758, 0.6484503, 0.6361696, 0.6309064, 0.6310819, 0.6342300, 0.6327583, 0.6255458, 0.6241520, 0.6414327, 0.6290643, 0.6378363, 0.6325634, 0.6328363, 0.6238986, 0.6293275, 0.6325828, 0.6328460, 0.6223099, 0.6204678, 0.6326706, 0.6359162, 0.6345127, 0.6308187, 0.6328363, 0.6206530, 0.6293372, 0.6291520, 0.6292398))
+
+df2 <- data.frame(mtry = c(rep(80,4), rep(90,4), rep(100,4), rep(110,4), rep(120,4), rep(130,4), rep(140,4), rep(150,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.6256335, 0.6239766, 0.6221345, 0.6274951, 0.6291520, 0.6240643, 0.6256433, 0.6305458, 0.6238889, 0.6307407, 0.6325731, 0.6222222, 0.6293275, 0.6256433, 0.6360819, 0.6254678, 0.6171540, 0.6273099, 0.6238012, 0.6188012, 0.6343372, 0.6325731, 0.6292495, 0.6275828, 0.6288012, 0.6221345, 0.6360916, 0.6291520, 0.6253801, 0.6260039, 0.6341520, 0.6237135))
+
+df3 <- data.frame(mtry = c(rep(2, 8), rep(4, 8), rep(6, 8), rep(8, 8), rep(10, 8), rep(12, 8), rep(14, 8), rep(16, 8), rep(18, 8), rep(20, 8), rep(22, 8), rep(24, 8), rep(26, 8), rep(28, 8), rep(30, 8), rep(32, 8), rep(34, 8), rep(36, 8), rep(38, 8), rep(40, 8), rep(42, 8)), ntree = as.factor(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 21)), Accuracy = c(0.6445906, 0.6359064, 0.6530117, 0.6427485, 0.6477485, 0.6341423, 0.6321345, 0.6359942, 0.6325731, 0.6497661, 0.6289669, 0.6495906, 0.6374756, 0.6359064, 0.6408187, 0.6477485, 0.6289669, 0.6445906, 0.6497661, 0.6532846, 0.6446784, 0.6359064, 0.6447661, 0.6411696, 0.6497661, 0.6428363, 0.6533626, 0.6291520, 0.6377485, 0.6395029, 0.6447661, 0.6429240, 0.6359064, 0.6378363, 0.6463450, 0.6360819, 0.6289766, 0.6359844, 0.6288889, 0.6464327, 0.6395029, 0.6429240, 0.6464327, 0.6360819, 0.6221345, 0.6427485, 0.6325731, 0.6427485, 0.6393275, 0.6410819, 0.6411696, 0.6412573, 0.6410819, 0.6409064, 0.6377485, 0.6398538, 0.6275634, 0.6381871, 0.6395906, 0.6518811, 0.6364327, 0.6343275, 0.6341520, 0.6291520, 0.6310819, 0.6414327, 0.6360819, 0.6414425, 0.6377485, 0.6256530, 0.6430117, 0.6363450, 0.6241618, 0.6255556, 0.6395029, 0.6345029, 0.6399415, 0.6345029, 0.6309844, 0.6377485, 0.6443275, 0.6345029, 0.6362573, 0.6363450, 0.6399415, 0.6293275, 0.6343275, 0.6362573, 0.6395906, 0.6380117, 0.6501170, 0.6363450, 0.6430117, 0.6276608, 0.6344152, 0.6413450, 0.6324756, 0.6239766, 0.6276511, 0.6429142, 0.6291520, 0.6273977, 0.6345029, 0.6310819, 0.6342398, 0.6433723, 0.6446784, 0.6327583, 0.6327485, 0.6430994, 0.6376608, 0.6310819, 0.6398538, 0.6430994, 0.6326608, 0.6361696, 0.6397758, 0.6310819, 0.6309064, 0.6364327, 0.6341520, 0.6307115, 0.6361696, 0.6416959, 0.6343275, 0.6344932, 0.6328363, 0.6344152, 0.6170468, 0.6309844, 0.6429240, 0.6380994, 0.6204678, 0.6276608, 0.6292398, 0.6311696, 0.6294152, 0.6446881, 0.6343275, 0.6415302, 0.6291520, 0.6273099, 0.6413548, 0.6277485, 0.6293372, 0.6275828, 0.6344152, 0.6312671, 0.6329240, 0.6363548, 0.6257310, 0.6326608, 0.6463450, 0.6363548, 0.6223977, 0.6308187, 0.6291520, 0.6446686, 0.6380994, 0.6361696, 0.6275731, 0.6358187, 0.6362476, 0.6344152, 0.6310916, 0.6293275, 0.6294055, 0.6293275))
+
+df <- rbind(df, df1, df2)
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 42, linetype = "dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df3)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df3[which.max(df3$Accuracy),]
+
+best_mtry <- 8
+best_ntree <- 1250
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(train_new)
+colnames(train_new) <- paste0("col_", seq(ncol(train_new))) 
+train_new$col_145 <- as.factor(train_new$col_145)
+rf <- randomForest(col_145~., data=train_new, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+?randomForest
+#Prediction and confusion matrix - training data:
+p1 <- predict(rf, train_new)
+confusionMatrix(p1, train_new$col_145)
+
+#Prediction and confusion matrix - test data:
+colnames(test_new) <- paste0("col_", seq(ncol(test_new))) 
+test_new$col_145 <- as.factor(test_new$col_145)
+p2 <- predict(rf, test_new)
+confusionMatrix(p2, test_new$col_145)
+
+#Number of nodes and variable importance:
+hist(treesize(rf),
+     main = "No. of Nodes for the Trees",
+     col = "green")
+
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_new <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:152)]
+imp_new$bugs <- old_colnames
+
+best10_new <- imp_new[order(-imp_new$MeanDecreaseGini),]
+write.table(best10_new, paste0(path, "results/mean_Gini_CD_vs_UC.txt"))
+best10_new <- best10_new[1:10,]
+
+# Model accuracy
+observed.classes <- test_new$col_145
+accuracy <- mean(p2 == observed.classes) # 0.625
+
+#Make ROC curve:
+predictions <- as.data.frame(predict(rf, test_new, type = "prob"))
+obs <- ifelse(observed.classes=="UC", 0, 1)
+pred <- prediction(predictions$CD, obs)
+perf <- performance(pred,"tpr","fpr")
+
+plot(perf,colorize=FALSE, col="black", main="Crohn's disease vs. Ulcerative colitis: Random Forest")
+lines(c(0,1),c(0,1),col = "gray", lty = 4 ) #517 width, 386 height
+
+auc_ROCR <- performance(pred, measure = "auc")
+auc_ROCR <- auc_ROCR@y.values[[1]] #0.6350251
+```
+
+
+### Plot distribution of top 10:
+```{r}
+plot_CD <- rbind(train_CD, test_CD)
+colnames(plot_CD) <- c(old_colnames[1:144], "Disease", old_colnames[145:151])
+i <- best10_CD$bugs[4]
+for (i in best10_CD$bugs){
+  ps_sub <- plot_CD %>% dplyr::select(i, Disease)
+  colnames(ps_sub)[1] <- "bug"
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "UC", "CD"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+}
+
+plot_UC <- rbind(train_UC, test_UC)
+colnames(plot_UC) <- c(old_colnames[1:144], "Disease", old_colnames[145:151])
+
+for (i in best10_UC$bugs[c(1:5, 7:10)]){
+  ps_sub <- plot_UC %>% dplyr::select(i, Disease)
+  colnames(ps_sub)[1] <- "bug"
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "UC", "CD"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+}
+
+ps_sub <- plot_UC %>% dplyr::select(Host_Age, Disease)
+ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "UC", "CD"))
+  
+p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=Host_Age))+xlab("")+ylab("Relative abundance")+ggtitle("Host age")+theme_classic()
+p1
+
+#Plot together the best10 variable importance:
+best10_CD$bugs <- gsub("_", " ", best10_CD$bugs)
+best10_UC$bugs <- gsub("_", " ", best10_UC$bugs)
+
+best10_CD$sign <- c("-", "-", "+", "-", "+", "-", "-", "+", "-", "-")
+best10_UC$sign <- c("-", "-", "-", "-", "-", "+", "-", "-", "-", "-")
+
+
+p1 <- ggplot(best10_CD)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("Crohn's Disease")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+p2 <- ggplot(best10_UC)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("Ulcerative Colitis")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+ggarrange(p1, p2)
+
+####################################
+#CD vs UC:
+plot_new <- rbind(train_new, test_new)
+colnames(plot_new) <- c(old_colnames[1:144], "Disease", old_colnames[145:151])
+
+for (i in best10_new$bugs){
+  ps_sub <- plot_new %>% dplyr::select(i, Disease)
+  colnames(ps_sub)[1] <- "bug"
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "UC", "CD"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+}
+
+#Plot together the best10 variable importance:
+best10_new$bugs <- gsub("_", " ", best10_new$bugs)
+best10_new$sign <- c("-", "-", "-", "-", "-", "-", "+", "+", "-", "-")
+
+p1 <- ggplot(best10_new)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+p1
+```
+
+## Within geographic locations. HC vs. IBD:
+### Prepare a test and a validation dataset:
+```{r}
+#Reduce the number to be tested! 
+ps_sub <- subset_samples(ps_relab, !is.na(Disease))
+ps_sub <- subset_samples(ps_sub, !is.na(geo_loc_name_country))
+ps_sub <- subset_samples(ps_sub, !is.na(Host_Age))
+ps_sub <- subset_samples(ps_sub, !is.na(host_sex))
+
+genus <- as.data.frame(as.matrix(otu_table(ps_sub)))
+genus[1:5, 1:5]
+#Remove columns with no count in any sample:
+genus1 <- genus[,colSums(genus)!=0]
+
+#Remove columns, where the genus is present in less than 10% of the samples:
+sum(sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]>0.90)
+genus <- genus1[, sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]<0.90]
+
+ps_relab_reduced <- phyloseq(otu_table(genus, taxa_are_rows=F), sample_data(ps_sub), tax_table(ps_sub))
+
+#Divide into geographic location:
+table(sample_data(ps_relab_reduced)$geo_loc_name_country_continent)
+ps_asia <- subset_samples(ps_relab_reduced, geo_loc_name_country_continent == "Asia")
+ps_europe <- subset_samples(ps_relab_reduced, geo_loc_name_country_continent == "Europe")
+ps_nAmerica <- subset_samples(ps_relab_reduced, geo_loc_name_country_continent == "North America")
+ps_sAmerica <- subset_samples(ps_relab_reduced, geo_loc_name_country_continent == "South America")
+ps_oceania <- subset_samples(ps_relab_reduced, geo_loc_name_country_continent == "Oceania")
+
+#Balance datasets based on disease!
+meta_data <- as.data.frame(as.matrix(sample_data(ps_asia)))
+meta_asia_CD <- meta_data %>% filter(Disease !="UC")
+meta_asia_UC <- meta_data %>% filter(Disease !="CD")
+
+meta_data <- as.data.frame(as.matrix(sample_data(ps_europe)))
+meta_europe_CD <- meta_data %>% filter(Disease !="UC")
+meta_europe_UC <- meta_data %>% filter(Disease !="CD")
+
+meta_data <- as.data.frame(as.matrix(sample_data(ps_nAmerica)))
+meta_nAmerica_CD <- meta_data %>% filter(Disease !="UC")
+meta_nAmerica_UC <- meta_data %>% filter(Disease !="CD")
+
+meta_data <- as.data.frame(as.matrix(sample_data(ps_sAmerica)))
+meta_sAmerica_CD <- meta_data %>% filter(Disease !="UC")
+meta_sAmerica_UC <- meta_data %>% filter(Disease !="CD")
+
+meta_data <- as.data.frame(as.matrix(sample_data(ps_oceania)))
+meta_oceania_CD <- meta_data %>% filter(Disease !="UC")
+meta_oceania_UC <- meta_data %>% filter(Disease !="CD")
+
+#Remove projects with 0 IBD cases or 0 HC:
+meta_asia_CD %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), HC = sum(Disease == "HC")) #NONE!
+meta_europe_CD %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), HC = sum(Disease == "HC"))
+meta_europe_CD <- meta_europe_CD %>% filter(!(BioProject %in% c("PRJEB18780", "PRJEB33031", "PRJNA418765", "PRJNA679275")))
+meta_nAmerica_CD %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), HC = sum(Disease == "HC"))
+meta_nAmerica_CD <- meta_nAmerica_CD %>% filter(!(BioProject %in% c("PRJNA380944", "PRJNA418765")))
+meta_sAmerica_CD %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), HC = sum(Disease == "HC")) #NONE!
+meta_oceania_CD %>% dplyr::group_by(BioProject) %>% summarize(CD = sum(Disease == "CD"), HC = sum(Disease == "HC")) #only 3 cases and controls..
+
+set.seed(0)
+new_CD_europe <- data.frame()
+for (i in unique(meta_europe_CD$BioProject)){
+  sub_CD <- meta_europe_CD %>% filter(BioProject==i) %>% filter(Disease == "CD")
+  sub_HC <- meta_europe_CD %>% filter(BioProject==i) %>% filter(Disease == "HC")
+  if (nrow(sub_CD) == nrow(sub_HC)){
+    new_CD_europe <- rbind(new_CD_europe,sub_CD)
+    new_CD_europe <- rbind(new_CD_europe,sub_HC)
+  } else if (nrow(sub_CD) < nrow(sub_HC)){
+    sub_HC <- sample_n(sub_HC, nrow(sub_CD))
+    new_CD_europe <- rbind(new_CD_europe,sub_CD)
+    new_CD_europe <- rbind(new_CD_europe,sub_HC)
+  } else {
+    sub_CD <- sample_n(sub_CD, nrow(sub_HC))
+    new_CD_europe <- rbind(new_CD_europe,sub_CD)
+    new_CD_europe <- rbind(new_CD_europe,sub_HC)    
+  }
+}
+
+set.seed(0)
+new_CD_nAmerica <- data.frame()
+for (i in unique(meta_nAmerica_CD$BioProject)){
+  sub_CD <- meta_nAmerica_CD %>% filter(BioProject==i) %>% filter(Disease == "CD")
+  sub_HC <- meta_nAmerica_CD %>% filter(BioProject==i) %>% filter(Disease == "HC")
+  if (nrow(sub_CD) == nrow(sub_HC)){
+    new_CD_nAmerica <- rbind(new_CD_nAmerica,sub_CD)
+    new_CD_nAmerica <- rbind(new_CD_nAmerica,sub_HC)
+  } else if (nrow(sub_CD) < nrow(sub_HC)){
+    sub_HC <- sample_n(sub_HC, nrow(sub_CD))
+    new_CD_nAmerica <- rbind(new_CD_nAmerica,sub_CD)
+    new_CD_nAmerica <- rbind(new_CD_nAmerica,sub_HC)
+  } else {
+    sub_CD <- sample_n(sub_CD, nrow(sub_HC))
+    new_CD_nAmerica <- rbind(new_CD_nAmerica,sub_CD)
+    new_CD_nAmerica <- rbind(new_CD_nAmerica,sub_HC)    
+  }
+}
+
+
+meta_asia_UC %>% dplyr::group_by(BioProject) %>% summarize(UC = sum(Disease == "UC"), HC = sum(Disease == "HC")) # Only 16 cases and controls
+meta_europe_UC %>% dplyr::group_by(BioProject) %>% summarize(UC = sum(Disease == "UC"), HC = sum(Disease == "HC"))
+meta_europe_UC <- meta_europe_UC %>% filter(!(BioProject %in% c("PRJEB18780", "PRJEB3206", "PRJEB7166", "PRJNA515212")))
+meta_nAmerica_UC %>% dplyr::group_by(BioProject) %>% summarize(UC = sum(Disease == "UC"), HC = sum(Disease == "HC"))
+meta_nAmerica_UC <- meta_nAmerica_UC %>% filter(BioProject != "PRJNA380944")
+meta_sAmerica_UC %>% dplyr::group_by(BioProject) %>% summarize(UC = sum(Disease == "UC"), HC = sum(Disease == "HC")) # Only 12 cases and controls
+meta_oceania_UC %>% dplyr::group_by(BioProject) %>% summarize(UC = sum(Disease == "UC"), HC = sum(Disease == "HC")) # Only 2 cases and controls
+
+
+set.seed(0)
+new_UC_europe <- data.frame()
+for (i in unique(meta_europe_UC$BioProject)){
+  sub_UC <- meta_europe_UC %>% filter(BioProject==i) %>% filter(Disease == "UC")
+  sub_HC <- meta_europe_UC %>% filter(BioProject==i) %>% filter(Disease == "HC")
+  if (nrow(sub_UC) == nrow(sub_HC)){
+    new_UC_europe <- rbind(new_UC_europe,sub_UC)
+    new_UC_europe <- rbind(new_UC_europe,sub_HC)
+  } else if (nrow(sub_UC) < nrow(sub_HC)){
+    sub_HC <- sample_n(sub_HC, nrow(sub_UC))
+    new_UC_europe <- rbind(new_UC_europe,sub_UC)
+    new_UC_europe <- rbind(new_UC_europe,sub_HC)
+  } else {
+    sub_UC <- sample_n(sub_UC, nrow(sub_HC))
+    new_UC_europe <- rbind(new_UC_europe,sub_UC)
+    new_UC_europe <- rbind(new_UC_europe,sub_HC)    
+  }
+}
+
+set.seed(0)
+new_UC_nAmerica <- data.frame()
+for (i in unique(meta_nAmerica_UC$BioProject)){
+  sub_UC <- meta_nAmerica_UC %>% filter(BioProject==i) %>% filter(Disease == "UC")
+  sub_HC <- meta_nAmerica_UC %>% filter(BioProject==i) %>% filter(Disease == "HC")
+  if (nrow(sub_UC) == nrow(sub_HC)){
+    new_UC_nAmerica <- rbind(new_UC_nAmerica,sub_UC)
+    new_UC_nAmerica <- rbind(new_UC_nAmerica,sub_HC)
+  } else if (nrow(sub_UC) < nrow(sub_HC)){
+    sub_HC <- sample_n(sub_HC, nrow(sub_UC))
+    new_UC_nAmerica <- rbind(new_UC_nAmerica,sub_UC)
+    new_UC_nAmerica <- rbind(new_UC_nAmerica,sub_HC)
+  } else {
+    sub_UC <- sample_n(sub_UC, nrow(sub_HC))
+    new_UC_nAmerica <- rbind(new_UC_nAmerica,sub_UC)
+    new_UC_nAmerica <- rbind(new_UC_nAmerica,sub_HC)    
+  }
+}
+
+ps_CD_europe <- subset_samples(ps_relab_reduced, Run %in% new_CD_europe$Run)
+ps_UC_europe <- subset_samples(ps_relab_reduced, Run %in% new_UC_europe$Run)
+ps_CD_nAmerica <- subset_samples(ps_relab_reduced, Run %in% new_CD_nAmerica$Run)
+ps_UC_nAmerica <- subset_samples(ps_relab_reduced, Run %in% new_UC_nAmerica$Run)
+
+#Don't split into test and train! The goal is not to predict, but to find top 10 predicters.
+otu <- as.data.frame(as.matrix(otu_table(ps_CD_europe)))
+meta <- sample_data(ps_CD_europe)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, Instrument, X16s_region, Host_Age, host_sex, N) #Only 1 type layout
+df_CD_europe <- cbind(otu, meta)
+df_CD_europe$N <- as.numeric(df_CD_europe$N)
+df_CD_europe$Host_Age <- as.numeric(df_CD_europe$Host_Age)
+
+otu <- as.data.frame(as.matrix(otu_table(ps_UC_europe)))
+meta <- sample_data(ps_UC_europe)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, Instrument, LibraryLayout, X16s_region, Host_Age, host_sex, N)
+df_UC_europe <- cbind(otu, meta)
+df_UC_europe$N <- as.numeric(df_UC_europe$N)
+df_UC_europe$Host_Age <- as.numeric(df_UC_europe$Host_Age)
+
+otu <- as.data.frame(as.matrix(otu_table(ps_CD_nAmerica)))
+meta <- sample_data(ps_CD_nAmerica)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, LibraryLayout, Host_Age, host_sex, N) #Only 1 type instrument and 16S region
+df_CD_nAmerica <- cbind(otu, meta)
+df_CD_nAmerica$N <- as.numeric(df_CD_nAmerica$N)
+df_CD_nAmerica$Host_Age <- as.numeric(df_CD_nAmerica$Host_Age)
+
+otu <- as.data.frame(as.matrix(otu_table(ps_UC_nAmerica)))
+meta <- sample_data(ps_UC_nAmerica)
+meta <- as.data.frame(as.matrix(meta)) %>% dplyr::select(Disease, Instrument, LibraryLayout, Host_Age, host_sex, N) #Only 1 type 16S
+df_UC_nAmerica <- cbind(otu, meta)
+df_UC_nAmerica$N <- as.numeric(df_UC_nAmerica$N)
+df_UC_nAmerica$Host_Age <- as.numeric(df_UC_nAmerica$Host_Age)
+
+```
+
+### Random Forest:
+```{r}
+## Start with CD, Europe:
+
+#Baseline model with default settings:
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+
+#Search for best mtry and ntree:
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+# train model
+tunegrid <- expand.grid(.mtry=c(15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom <- train(Disease~., data=df_CD_europe, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(40, 45, 50, 55, 60, 65, 70, 75), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom1 <- train(Disease~., data=df_CD_europe, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom1$results$Accuracy
+
+#Last grid search  - finer!:
+tunegrid <- expand.grid(.mtry=seq(from =2, to = 26, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom3 <- train(Disease~., data=df_CD_europe, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom3$results$Accuracy
+
+#Results from grid search:
+df <- data.frame(mtry = c(rep(15,4), rep(20,4), rep(25,4), rep(30,4), rep(35,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),5)), Accuracy = c(0.8257895, 0.8293957, 0.8239376, 0.8220858, 0.8222710, 0.8239376, 0.8257895, 0.8259747, 0.8221832, 0.8220858, 0.8185673, 0.8276413, 0.8239376, 0.8257895, 0.8222710, 0.8276413, 0.8186647, 0.8205166, 0.8185673, 0.8204191))
+
+df1 <- data.frame(mtry = c(rep(40,4), rep(45,4), rep(50,4), rep(55,4), rep(60,4), rep(65,4), rep(70,4), rep(75,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.8163743, 0.8109162, 0.8145224, 0.8145224, 0.8126706, 0.8164717, 0.8182261, 0.8180312, 0.8056530, 0.8126706, 0.8181287, 0.8163743, 0.8091618, 0.8126706, 0.8126706, 0.8126706, 0.8164717, 0.8108187, 0.8055556, 0.8109162, 0.8162768, 0.8126706, 0.8089669, 0.8108187, 0.8109162, 0.8125731, 0.8108187, 0.8125731, 0.8036062, 0.8072125, 0.8108187, 0.8089669))
+
+df3 <- data.frame(mtry = c(rep(2, 8), rep(4, 8), rep(6, 8), rep(8, 8), rep(10, 8), rep(12, 8), rep(14, 8), rep(16, 8), rep(18, 8), rep(20, 8), rep(22, 8), rep(24, 8), rep(26, 8)), ntree = as.factor(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 13)), Accuracy = c(0.8292398, 0.8329435, 0.8365497, 0.8328460, 0.8329435, 0.8346979, 0.8329435, 0.8309942, 0.8272904, 0.8218324, 0.8254386, 0.8291423, 0.8254386, 0.8255361, 0.8272904, 0.8255361, 0.8200780, 0.8217349, 0.8272904, 0.8290448, 0.8273879, 0.8272904, 0.8291423, 0.8236842, 0.8198830, 0.8272904, 0.8290448, 0.8236842, 0.8235867, 0.8234893, 0.8218324, 0.8235867, 0.8198830, 0.8271930, 0.8234893, 0.8198830, 0.8217349, 0.8218324, 0.8234893, 0.8235867, 0.8144250, 0.8217349, 0.8235867, 0.8235867, 0.8216374, 0.8216374, 0.8253411, 0.8197856, 0.8181287, 0.8182261, 0.8197856, 0.8197856, 0.8179337, 0.8180312, 0.8216374, 0.8234893, 0.8199805, 0.8127680, 0.8198830, 0.8180312, 0.8217349, 0.8161793, 0.8216374, 0.8180312, 0.8109162, 0.8180312, 0.8198830, 0.8179337, 0.8180312, 0.8179337, 0.8162768, 0.8198830, 0.8181287, 0.8198830, 0.8180312, 0.8180312, 0.8162768, 0.8161793, 0.8180312, 0.8161793, 0.8180312, 0.8182261, 0.8179337, 0.8180312, 0.8180312, 0.8180312, 0.8179337, 0.8181287, 0.8217349, 0.8216374, 0.8180312, 0.8162768, 0.8125731, 0.8162768, 0.8180312, 0.8161793, 0.8198830, 0.8162768, 0.8180312, 0.8216374, 0.8180312, 0.8180312, 0.8180312, 0.8162768))
+
+df <- rbind(df, df1)
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 2, linetype = "dashed")+geom_vline(xintercept = 26, linetype = "dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df3)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df3[which.max(df3$Accuracy),]
+
+best_mtry <- 2
+best_ntree <- 1250
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(df_CD_europe)
+colnames(df_CD_europe) <- paste0("col_", seq(ncol(df_CD_europe))) 
+df_CD_europe$col_145 <- as.factor(df_CD_europe$col_145)
+rf <- randomForest(col_145~., data=df_CD_europe, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+
+#Variable importance:
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_CD_europe <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:150)]
+imp_CD_europe$bugs <- old_colnames
+
+best10_CD_europe <- imp_CD_europe[order(-imp_CD_europe$MeanDecreaseGini),]
+best10_CD_europe <- best10_CD_europe[1:10,]
+
+########
+#CD, North America:
+# train model
+tunegrid <- expand.grid(.mtry=c(15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom <- train(Disease~., data=df_CD_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(40, 45, 50, 55, 60, 65, 70, 75), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom1 <- train(Disease~., data=df_CD_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom1$results$Accuracy
+
+#Last grid search  - finer!:
+tunegrid <- expand.grid(.mtry=seq(from =2, to = 22, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom3 <- train(Disease~., data=df_CD_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom3$results$Accuracy
+
+#Results from grid search:
+df <- data.frame(mtry = c(rep(15,4), rep(20,4), rep(25,4), rep(30,4), rep(35,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),5)), Accuracy = c(0.6462897, 0.6303968, 0.6575794, 0.6462897, 0.6416865, 0.6464286, 0.6332143, 0.6506151, 0.6358730, 0.6399008, 0.6371032, 0.6308532, 0.6438889, 0.6394643, 0.6347024, 0.6354365, 0.6326389, 0.6217659, 0.6281944, 0.6302381))
+
+df1 <- data.frame(mtry = c(rep(40,4), rep(45,4), rep(50,4), rep(55,4), rep(60,4), rep(65,4), rep(70,4), rep(75,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.6303968, 0.6309722, 0.6277183, 0.6389881, 0.6311310, 0.6373611, 0.6198413, 0.6242857, 0.6370635, 0.6286310, 0.6283135, 0.6286111, 0.6241468, 0.6240278, 0.6418056, 0.6332143, 0.6219246, 0.6197024, 0.6223810, 0.6223611, 0.6260714, 0.6198413, 0.6222421, 0.6308135, 0.6177778, 0.6174802, 0.6191071, 0.6130159, 0.6201389, 0.6200000, 0.6283135, 0.6179167))
+
+df3 <- data.frame(mtry = c(rep(2, 8), rep(4, 8), rep(6, 8), rep(8, 8), rep(10, 8), rep(12, 8), rep(14, 8), rep(16, 8), rep(18, 8), rep(20, 8), rep(22, 8)), ntree = as.factor(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 11)), Accuracy = c(0.6421429, 0.6471825, 0.6696032, 0.6556349, 0.6582937, 0.6602183, 0.6667659, 0.6691667, 0.6530952, 0.6642460, 0.6644048, 0.6529563, 0.6575595, 0.6531151, 0.6690079, 0.6553373, 0.6578968, 0.6574405, 0.6599405, 0.6534127, 0.6502976, 0.6554960, 0.6623413, 0.6551984, 0.6578968, 0.6532738, 0.6461508, 0.6510516, 0.6440873, 0.6529762, 0.6508929, 0.6415278, 0.6618849, 0.6415278, 0.6433135, 0.6482143, 0.6549206, 0.6507341, 0.6482143, 0.6501389, 0.6528175, 0.6459921, 0.6419841, 0.6486706, 0.6548810, 0.6480556, 0.6458333, 0.6435913, 0.6459524, 0.6529563, 0.6525198, 0.6440476, 0.6480556, 0.6504365, 0.6458333, 0.6437698, 0.6547619, 0.6422817, 0.6366270, 0.6512103, 0.6345437, 0.6396032, 0.6504167, 0.6439286, 0.6436111, 0.6486706, 0.6486508, 0.6488095, 0.6393452, 0.6504563, 0.6399206, 0.6483333, 0.6502976, 0.6549008, 0.6459921, 0.6445238, 0.6303968, 0.6418651, 0.6369444, 0.6416667, 0.6281548, 0.6299603, 0.6460119, 0.6390079, 0.6391667, 0.6486706, 0.6393056, 0.6351587))
+
+df <- rbind(df, df1)
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 2, linetype = "dashed")+geom_vline(xintercept = 22, linetype = "dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df3)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df3[which.max(df3$Accuracy),]
+
+best_mtry <- 2
+best_ntree <- 1250
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(df_CD_nAmerica)
+colnames(df_CD_nAmerica) <- paste0("col_", seq(ncol(df_CD_nAmerica))) 
+df_CD_nAmerica$col_145 <- as.factor(df_CD_nAmerica$col_145)
+rf <- randomForest(col_145~., data=df_CD_nAmerica, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+
+#Variable importance:
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_CD_nAmerica <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:149)]
+imp_CD_nAmerica$bugs <- old_colnames
+
+best10_CD_nAmerica <- imp_CD_nAmerica[order(-imp_CD_nAmerica$MeanDecreaseGini),]
+best10_CD_nAmerica <- best10_CD_nAmerica[1:10,]
+
+###########################################################################################################################
+#UC, Europe:
+#Baseline model with default settings:
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+
+#Search for best mtry and ntree:
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+# train model
+tunegrid <- expand.grid(.mtry=c(15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom <- train(Disease~., data=df_UC_europe, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(40, 45, 50, 55, 60, 65, 70, 75), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom1 <- train(Disease~., data=df_UC_europe, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom1$results$Accuracy
+
+#Last grid search  - finer!:
+tunegrid <- expand.grid(.mtry=seq(from =2, to = 26, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom3 <- train(Disease~., data=df_UC_europe, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+custom3$results$Accuracy
+
+#Results from grid search:
+df <- data.frame(mtry = c(rep(15,4), rep(20,4), rep(25,4), rep(30,4), rep(35,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),5)), Accuracy = c(0.7564103, 0.7633700, 0.7633700, 0.7657509, 0.7536630, 0.7582418, 0.7683150, 0.7631868, 0.7560440, 0.7661172, 0.7586081, 0.7635531, 0.7417582, 0.7609890, 0.7633700, 0.7562271, 0.7560440, 0.7514652, 0.7611722, 0.7492674))
+
+df1 <- data.frame(mtry = c(rep(40,4), rep(45,4), rep(50,4), rep(55,4), rep(60,4), rep(65,4), rep(70,4), rep(75,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.7445055, 0.7490842, 0.7468864, 0.7516484, 0.7516484, 0.7540293, 0.7611722, 0.7468864, 0.7443223, 0.7468864, 0.7468864, 0.7468864, 0.7516484, 0.7468864, 0.7445055, 0.7419414, 0.7492674, 0.7349817, 0.7421245, 0.7468864, 0.7397436, 0.7417582, 0.7468864, 0.7468864, 0.7445055, 0.7395604, 0.7373626, 0.7373626, 0.7371795, 0.7349817, 0.7397436, 0.7421245))
+
+df3 <- data.frame(mtry = c(rep(2, 8), rep(4, 8), rep(6, 8), rep(8, 8), rep(10, 8), rep(12, 8), rep(14, 8), rep(16, 8), rep(18, 8), rep(20, 8), rep(22, 8), rep(24, 8), rep(26, 8)), ntree = as.factor(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 13)), Accuracy = c(0.7677656, 0.7630037, 0.7602564, 0.7727106, 0.7750916, 0.7703297, 0.7705128, 0.7628205, 0.7679487, 0.7606227, 0.7655678, 0.7752747, 0.7728938, 0.7752747, 0.7776557, 0.7657509, 0.7703297, 0.7657509, 0.7681319, 0.7659341, 0.7703297, 0.7679487, 0.7679487, 0.7705128, 0.7606227, 0.7703297, 0.7683150, 0.7657509, 0.7608059, 0.7679487, 0.7657509, 0.7584249, 0.7631868, 0.7681319, 0.7705128, 0.7657509, 0.7752747, 0.7730769, 0.7679487, 0.7657509, 0.7705128, 0.7683150, 0.7633700, 0.7681319, 0.7683150, 0.7659341, 0.7708791, 0.7730769, 0.7728938, 0.7587912, 0.7631868, 0.7657509, 0.7655678, 0.7608059, 0.7732601, 0.7706960, 0.7653846, 0.7631868, 0.7683150, 0.7584249, 0.7657509, 0.7706960, 0.7633700, 0.7560440, 0.7586081, 0.7663004, 0.7659341, 0.7706960, 0.7633700, 0.7631868, 0.7659341, 0.7609890, 0.7609890, 0.7708791, 0.7586081, 0.7562271, 0.7633700, 0.7681319, 0.7635531, 0.7681319, 0.7562271, 0.7655678, 0.7661172, 0.7657509, 0.7633700, 0.7631868, 0.7611722, 0.7586081, 0.7514652, 0.7633700, 0.7633700, 0.7708791, 0.7611722, 0.7683150, 0.7633700, 0.7587912, 0.7732601, 0.7584249, 0.7586081, 0.7684982, 0.7633700, 0.7633700, 0.7635531, 0.7609890))
+
+df <- rbind(df, df1)
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 2, linetype = "dashed")+geom_vline(xintercept = 26, linetype = "dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df3)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df3[which.max(df3$Accuracy),]
+
+best_mtry <- 4
+best_ntree <- 2250
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(df_UC_europe)
+colnames(df_UC_europe) <- paste0("col_", seq(ncol(df_UC_europe))) 
+df_UC_europe$col_145 <- as.factor(df_UC_europe$col_145)
+rf <- randomForest(col_145~., data=df_UC_europe, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+
+#Variable importance:
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_UC_europe <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:151)]
+imp_UC_europe$bugs <- old_colnames
+
+best10_UC_europe <- imp_UC_europe[order(-imp_UC_europe$MeanDecreaseGini),]
+best10_UC_europe <- best10_UC_europe[1:10,]
+
+########
+#UC, North America:
+# train model
+tunegrid <- expand.grid(.mtry=c(15, 20, 25, 30, 35), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom <- train(Disease~., data=df_UC_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+summary(custom)
+# plot(custom)
+custom$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(40, 45, 50, 55, 60, 65, 70, 75), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom1 <- train(Disease~., data=df_UC_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+# summary(custom1)
+# plot(custom1)
+custom1$results$Accuracy
+
+tunegrid <- expand.grid(.mtry=c(80, 90, 100, 110, 120, 130, 140, 150), .ntree=c(1000, 1500, 2000, 2500))
+set.seed(0)
+custom2 <- train(Disease~., data=df_UC_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+#summary(custom2)
+#plot(custom2)
+custom2$results$Accuracy
+
+#Last grid search  - finer!:
+tunegrid <- expand.grid(.mtry=seq(from =50, to = 80, by =2), .ntree=c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500))
+set.seed(0)
+custom3 <- train(Disease~., data=df_UC_nAmerica, method=customRF, metric=metric, tuneGrid=tunegrid, trControl=control)
+# summary(custom3)
+# plot(custom3)
+custom3$results$Accuracy
+
+#Results from grid search:
+df <- data.frame(mtry = c(rep(15,4), rep(20,4), rep(25,4), rep(30,4), rep(35,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),5)), Accuracy = c(0.6191618, 0.6227680, 0.6345127, 0.6378460, 0.6213743, 0.6293372, 0.6278558, 0.6347856, 0.6352339, 0.6351559, 0.6294250, 0.6365595, 0.6344250, 0.6396979, 0.6365497, 0.6296979, 0.6176706, 0.6313548, 0.6398830, 0.6346979))
+
+df1 <- data.frame(mtry = c(rep(40,4), rep(45,4), rep(50,4), rep(55,4), rep(60,4), rep(65,4), rep(70,4), rep(75,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.6362768, 0.6278558, 0.6397173, 0.6415497, 0.6432164, 0.6361891, 0.6346979, 0.6312768, 0.6366472, 0.6244444, 0.6329435, 0.6328460, 0.6450682, 0.6297271, 0.6343470, 0.6274951, 0.6431287, 0.6382261, 0.6396979, 0.6366472, 0.6431384, 0.6344444, 0.6399805, 0.6329532, 0.6258480, 0.6380507, 0.6346199, 0.6330507, 0.6327680, 0.6432164, 0.6432261, 0.6346199))
+
+df2 <- data.frame(mtry = c(rep(80,4), rep(90,4), rep(100,4), rep(110,4), rep(120,4), rep(130,4), rep(140,4), rep(150,4)), ntree = as.factor(rep(c(1000,1500,2000,2500),8)), Accuracy = c(0.6327680, 0.6397953, 0.6397076, 0.6314717, 0.6326901, 0.6414620, 0.6360136, 0.6293470, 0.6377680, 0.6328655, 0.6326901, 0.6293470, 0.6294347, 0.6380409, 0.6226023, 0.6393567, 0.6314717, 0.6382261, 0.6326023, 0.6259357, 0.6376998, 0.6362768, 0.6376901, 0.6361988, 0.6398830, 0.6346199, 0.6327778, 0.6276901, 0.6295322, 0.6415497, 0.6328752, 0.6328752))
+
+df3 <- data.frame(mtry = c(rep(50, 8), rep(52, 8), rep(54, 8), rep(56, 8), rep(58, 8), rep(60, 8), rep(62, 8), rep(64, 8), rep(66, 8), rep(68, 8), rep(70, 8), rep(72, 8), rep(74, 8), rep(76, 8), rep(78, 8), rep(80, 8)), ntree = as.factor(rep(c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500), 16)), Accuracy = c(0.6329532, 0.6316569, 0.6292593, 0.6468129, 0.6347173, 0.6333041, 0.6346199, 0.6327583, 0.6203801, 0.6333138, 0.6445127, 0.6311988, 0.6384893, 0.6345322, 0.6363743, 0.6274074, 0.6344542, 0.6257407, 0.6359162, 0.6414717, 0.6348733, 0.6294347, 0.6468226, 0.6382359, 0.6344444, 0.6297173, 0.6364522, 0.6296199, 0.6485770, 0.6381287, 0.6394347, 0.6326706, 0.6640156, 0.6412865, 0.6311988, 0.6496101, 0.6398830, 0.6365595, 0.6279532, 0.6294444, 0.6257505, 0.6311111, 0.6396101, 0.6248051, 0.6311891, 0.6330312, 0.6429435, 0.6382261, 0.6366472, 0.6327680, 0.6484113, 0.6344444, 0.6342495, 0.6431287, 0.6431384, 0.6311014, 0.6330409, 0.6452339, 0.6397953, 0.6330409, 0.6382261, 0.6417251, 0.6411891, 0.6262865, 0.6363743, 0.6379435, 0.6347076, 0.6329532, 0.6259259, 0.6325926, 0.6295322, 0.6311988, 0.6346979, 0.6343470, 0.6461891, 0.6380312, 0.6294347, 0.6364717, 0.6383138, 0.6327680, 0.6260039, 0.6417154, 0.6394444, 0.6311111, 0.6327680, 0.6277680, 0.6498051, 0.6381384, 0.6497173, 0.6484990, 0.6363645, 0.6278558, 0.6276803, 0.6344347, 0.6395224, 0.6362865, 0.6295322, 0.6411014, 0.6383236, 0.6382261, 0.6277680, 0.6414620, 0.6413743, 0.6311014, 0.6346199, 0.6429435, 0.6361014, 0.6384016, 0.6361014, 0.6311891, 0.6444347, 0.6361891, 0.6278558, 0.6413743, 0.6348928, 0.6329630, 0.6225049, 0.6242690, 0.6298928, 0.6291618, 0.6364522, 0.6262086, 0.6247173, 0.6324951, 0.6344347, 0.6396979, 0.6326803, 0.6343470))
+
+df <- rbind(df, df1, df2)
+ggplot(df)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()+geom_vline(xintercept = 50, linetype = "dashed")+geom_vline(xintercept = 80, linetype = "dashed")
+df[which.max(df$Accuracy),]
+
+ggplot(df3)+
+  geom_line(aes(x=mtry, y=Accuracy, color=ntree))+theme_classic()
+df3[which.max(df3$Accuracy),]
+
+best_mtry <- 58
+best_ntree <- 750
+
+#After selecting the optimal model: Fit and investigate!
+#RF:
+set.seed(0)
+old_colnames <- colnames(df_UC_nAmerica)
+colnames(df_UC_nAmerica) <- paste0("col_", seq(ncol(df_UC_nAmerica))) 
+df_UC_nAmerica$col_145 <- as.factor(df_UC_nAmerica$col_145)
+rf <- randomForest(col_145~., data=df_UC_nAmerica, mtry=best_mtry, ntree = best_ntree) 
+print(rf)
+
+#Variable importance:
+varImpPlot(rf,
+           sort = T,
+           n.var = 10,
+           main = "Top 10 - Variable Importance")
+imp_UC_nAmerica <- as.data.frame(importance(rf))
+old_colnames <- old_colnames[c(1:144, 146:150)]
+imp_UC_nAmerica$bugs <- old_colnames
+
+best10_UC_nAmerica <- imp_UC_nAmerica[order(-imp_UC_nAmerica$MeanDecreaseGini),]
+best10_UC_nAmerica <- best10_UC_nAmerica[1:10,]
+
+```
+
+### Plot top 10 together:
+```{r}
+best10_CD_europe
+
+for (i in best10_CD_europe$bugs){
+  ps_sub <- df_CD_europe %>% dplyr::select(i, Disease)
+  colnames(ps_sub) <- c("bug", "Disease")
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "CD"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+  print(median((ps_sub %>% filter(Disease =="CD"))$bug)-median((ps_sub %>% filter(Disease =="HC"))$bug))
+}
+best10_CD_europe$sign <- c("-", "-", "-", "-", "-", "+", "-", "-", "-", "-")
+
+best10_UC_europe
+
+for (i in best10_UC_europe$bugs){
+  ps_sub <- df_UC_europe %>% dplyr::select(i, Disease)
+  colnames(ps_sub) <- c("bug", "Disease")
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "UC"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+  print(median((ps_sub %>% filter(Disease =="UC"))$bug)-median((ps_sub %>% filter(Disease =="HC"))$bug))
+}
+best10_UC_europe$sign <- c("-", "-", "-", "-", "+", "-", "-", "-", "-", "-")
+
+best10_CD_nAmerica
+for (i in best10_CD_nAmerica$bugs){
+  ps_sub <- df_CD_nAmerica %>% dplyr::select(i, Disease)
+  colnames(ps_sub) <- c("bug", "Disease")
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "CD"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+  print(median((ps_sub %>% filter(Disease =="CD"))$bug)-median((ps_sub %>% filter(Disease =="HC"))$bug))
+}
+best10_CD_nAmerica$sign <- c("-", "-", "-", "-", "-", "-", "-", "+", "-", "+")
+
+best10_UC_nAmerica
+
+for (i in best10_UC_nAmerica$bugs){
+  ps_sub <- df_UC_nAmerica %>% dplyr::select(i, Disease)
+  colnames(ps_sub) <- c("bug", "Disease")
+  
+  ps_sub$Disease <- factor(ps_sub$Disease, levels=c("HC", "UC"))
+  p1 <- ggplot(ps_sub)+
+    geom_boxplot(aes(x=Disease, y=log(bug+1)))+xlab("")+ylab("Relative abundance")+ggtitle(gsub("_", " ", i))+theme_classic()
+  print(p1)
+  print(median((ps_sub %>% filter(Disease =="UC"))$bug)-median((ps_sub %>% filter(Disease =="HC"))$bug))
+}
+best10_UC_nAmerica$sign <- c("-", "+", "+", "-", "-", "+", "-", "-", "+", "-")
+
+
+#Plot together the best10 variable importance:
+best10_CD_europe$bugs <- gsub("_", " ", best10_CD_europe$bugs)
+best10_UC_europe$bugs <- gsub("_", " ", best10_UC_europe$bugs)
+best10_CD_nAmerica$bugs <- gsub("_", " ", best10_CD_nAmerica$bugs)
+best10_UC_nAmerica$bugs <- gsub("_", " ", best10_UC_nAmerica$bugs)
+
+
+p1 <- ggplot(best10_CD_europe)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("CD, Europe")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+p2 <- ggplot(best10_UC_europe)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("UC, Europe")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+p3 <- ggplot(best10_CD_nAmerica)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("CD, North America")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+p4 <- ggplot(best10_UC_nAmerica)+
+  geom_point(aes(x=MeanDecreaseGini, y=reorder(bugs, MeanDecreaseGini), color=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("UC, North America")+ scale_color_manual(values=c("royalblue", "red2"))+theme(legend.position = "none")
+ggarrange(p1, p2, p3, p4)
+
+#Tile plot
+best10_CD_europe$part <- "CD, Europe"
+best10_UC_europe$part <- "UC, Europe"
+best10_CD_nAmerica$part <- "CD, North America"
+best10_UC_nAmerica$part <- "UC, North America"
+
+best10 <- rbind(best10_CD_europe, best10_UC_europe, best10_CD_nAmerica, best10_UC_nAmerica)
+ggplot(best10, aes(x=part, y=forcats::fct_rev(bugs)))+
+  geom_tile(aes(fill=MeanDecreaseGini))+
+  geom_text(aes(label=sign), color="white")+
+  theme_classic()+xlab("")+ylab("")+guides(x =  guide_axis(angle = 90))
+```
+

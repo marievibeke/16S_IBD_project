@@ -1,0 +1,614 @@
+---
+title: "Statistical analysis: Diversity"
+output:
+  github_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+## Read in packages and data
+```{r message=FALSE, warning=FALSE, error=TRUE}
+library(tidyverse)
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(phyloseq)
+library(vegan)
+library(lme4)
+library(lmerTest)
+library(car)
+library(ggpubr)
+library(ggprism)
+
+packageVersion("tidyverse")
+packageVersion("dplyr")
+packageVersion("caret")
+packageVersion("ggplot2")
+packageVersion("phyloseq")
+packageVersion("vegan")
+packageVersion("lme4")
+packageVersion("lmerTest")
+packageVersion("car")
+packageVersion("ggpubr")
+packageVersion("ggprism")
+
+path <- "C:/Users/FX76TZ/OneDrive - Aalborg Universitet/Mikrobiom korrelation/"
+
+```
+
+Read in data:
+```{r}
+ps_count <- readRDS(paste0(path, "data/IBD_project/ps_total_count.rds"))
+ps_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+
+alpha_div_ASV <- read.csv(paste0(path, "data/IBD_project/AlphaDiv_ASV.txt"), sep="\t")
+```
+
+## Analyze alpha diversity
+
+### Analysis of technical features
+Technical features: Study-ID, instrument, single/paired, read depth, V-region
+Test whether the number of detected ASVs and genera are depending on these features.
+```{r}
+#Remove the samples also removed from the ps object due to less than 2000 genus reads pr. sample:
+alpha_div_ASV <- alpha_div_ASV %>% filter(Run %in% sample_data(ps_count)$Run)
+
+#Check whether data should be transformed:
+ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=Chao1))+theme_classic()+ylab("Count")
+ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=log(Chao1+1)))+theme_classic()+ylab("Count")+xlab("Chao1 - log transformed")
+
+ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=Shannon))+theme_classic()+ylab("Count")
+
+alpha_div_ASV$Chao1_transformed <- log(alpha_div_ASV$Chao1 +1)
+
+#Add read depth from ps object:
+meta_2 <- as.data.frame(as.matrix(sample_data(ps_count))) %>% dplyr::select(Run, N)
+meta_2$N <- as.numeric(meta_2$N)
+alpha_div_ASV <- merge(alpha_div_ASV, meta_2, by.x="Run", by.y="Run")
+
+#Transform N to be on similar scale as alpha_div
+ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=N))
+
+ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=log(N+1)))
+
+alpha_div_ASV$N_transformed <- log(alpha_div_ASV$N+1)
+
+#Remove mean +- 3*SD - alpha diversity:
+alpha_sub_Chao1 <- alpha_div_ASV %>% filter(Chao1_transformed < mean(alpha_div_ASV$Chao1_transformed)+3*sd(alpha_div_ASV$Chao1_transformed)) %>% filter(Chao1_transformed > mean(alpha_div_ASV$Chao1_transformed)-3*sd(alpha_div_ASV$Chao1_transformed)) 
+#5394 samples
+
+alpha_sub_Shannon <- alpha_div_ASV %>% filter(Shannon < mean(alpha_div_ASV$Shannon)+3*sd(alpha_div_ASV$Shannon)) %>% filter(Shannon > mean(alpha_div_ASV$Shannon)-3*sd(alpha_div_ASV$Shannon)) 
+#5399 samples
+
+
+# Test all technical features together in a linear model:
+f_asv <- lm(Chao1_transformed ~ Instrument + LibraryLayout + X16s_region+N_transformed , data=alpha_sub_Chao1)
+car::vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+
+# Repeat for Shannon:
+f_asv <- lm(Shannon ~ Instrument + LibraryLayout + X16s_region + N_transformed, data=alpha_sub_Shannon)
+car::vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+```
+
+
+### Analysis of biological covariates
+Biological features: Geography, gender, age, BMI, smoking - test them one at the time, because the choice will reduce the sample size a lot
+Include important technical features as covariates
+```{r}
+alpha_sub_Chao1$Host_Age <- as.numeric(alpha_sub_Chao1$Host_Age)
+alpha_sub_Shannon$Host_Age <- as.numeric(alpha_sub_Shannon$Host_Age)
+alpha_sub_Chao1$host_body_mass_index <- as.numeric(alpha_sub_Chao1$host_body_mass_index)
+alpha_sub_Shannon$host_body_mass_index <- as.numeric(alpha_sub_Shannon$host_body_mass_index)
+
+#Remove extreme (and definitely wrongly notated) BMIs
+alpha_sub_Chao1$host_body_mass_index[as.numeric(alpha_sub_Chao1$host_body_mass_index) < 10] <- NA
+alpha_sub_Chao1$host_body_mass_index[as.numeric(alpha_sub_Chao1$host_body_mass_index) > 100] <- NA
+alpha_sub_Shannon$host_body_mass_index[as.numeric(alpha_sub_Shannon$host_body_mass_index) < 10] <- NA
+alpha_sub_Shannon$host_body_mass_index[as.numeric(alpha_sub_Shannon$host_body_mass_index) > 100] <- NA
+
+#Chao1, ASV 
+alpha_sub_Chao1$technical <- paste0(alpha_sub_Chao1$Instrument, "_", alpha_sub_Chao1$LibraryLayout, "_", alpha_sub_Chao1$X16s_region)
+
+#Sex
+f_asv <- lm(Chao1_transformed ~ technical + N_transformed + host_sex, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+sum(!is.na(alpha_sub_Chao1$host_sex)) #3172 samples
+
+#Age
+f_asv <- lm(Chao1_transformed ~ technical + N_transformed + Host_Age, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+sum(!is.na(alpha_sub_Chao1$Host_Age)) #2615 samples
+
+#Country
+f_asv <- lm(Chao1_transformed ~ technical + N_transformed + geo_loc_name_country, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+sum(!is.na(alpha_sub_Chao1$geo_loc_name_country)) #5223 samples
+
+#Continent
+f_asv <- lm(Chao1_transformed ~ technical + N_transformed + geo_loc_name_country_continent, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+
+#BMI
+f_asv <- lm(Chao1_transformed ~technical + N_transformed + log(host_body_mass_index+1), data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+sum(!is.na(alpha_sub_Chao1$host_body_mass_index)) #1784 samples
+
+
+#Smoking
+f_asv <- lm(Chao1_transformed ~ technical + N_transformed + smoking_status, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+sum(!is.na(alpha_sub_Chao1$smoking_status)) #1831 samples
+
+#Shannon, ASV 
+alpha_sub_Shannon$technical <- paste0(alpha_sub_Shannon$Instrument, "_", alpha_sub_Shannon$LibraryLayout, "_", alpha_sub_Shannon$X16s_region)
+#Sex
+f_asv <- lm(Shannon ~ technical + N_transformed + host_sex, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+sum(!is.na(alpha_sub_Shannon$host_sex)) #3171 samples
+
+#Age
+f_asv <- lm(Shannon ~ technical + N_transformed+ Host_Age, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+sum(!is.na(alpha_sub_Shannon$Host_Age)) #2611 samples
+
+#Country
+f_asv <- lm(Shannon ~ technical + N_transformed+ geo_loc_name_country, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+sum(!is.na(alpha_sub_Shannon$geo_loc_name_country)) #5225 samples
+
+#Continent
+f_asv <- lm(Shannon ~ technical + N_transformed+ geo_loc_name_country_continent, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+
+#BMI
+f_asv <- lm(Shannon ~ technical + N_transformed+ log(host_body_mass_index+1), data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+sum(!is.na(alpha_sub_Shannon$host_body_mass_index)) #1767 samples
+
+#Smoking
+f_asv <- lm(Shannon ~ technical + N_transformed+ smoking_status, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+f_1 <- aov(f_asv)
+car::Anova(f_1, type = 2)
+sum(!is.na(alpha_sub_Shannon$smoking_status)) #1812 samples
+
+
+```
+
+
+### Analysis of the association between microbiome composition and disease status
+Include important techincal and biological features as covariates
+
+Main analysis:
+```{r}
+alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("HC", "CD", "UC"))
+alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("HC", "CD", "UC"))
+
+alpha_sub_Chao1$technical <- paste0(alpha_sub_Chao1$Instrument, "_", alpha_sub_Chao1$X16s_region, "_", alpha_sub_Chao1$LibraryLayout, "_", alpha_sub_Chao1$geo_loc_name_country_continent)
+alpha_sub_Shannon$technical <- paste0(alpha_sub_Shannon$Instrument, "_", alpha_sub_Shannon$X16s_region, "_", alpha_sub_Shannon$LibraryLayout, "_", alpha_sub_Shannon$geo_loc_name_country_continent)
+
+
+#Chao1 - main analysis
+f_asv <- lm(Chao1_transformed ~ N_transformed + technical + Host_Age + Disease, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+exp(-0.4088173)-1
+exp(-0.2694306)-1
+
+#Shannon - main analysis and sensitivity (BMI and smoking was not significant)
+f_asv <- lm(Shannon ~ N_transformed + technical + Host_Age + Disease, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+
+
+#Check: is there a significant difference between UC and CD?
+alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("UC", "HC", "CD"))
+alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("UC", "HC", "CD"))
+
+#Chao1 - main analysis
+f_asv <- lm(Chao1_transformed ~ N_transformed + technical + Host_Age + Disease, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+exp(-0.1393866)-1
+
+#Shannon, ASV
+f_asv <- lm(Shannon ~ N_transformed + technical + Host_Age + Disease, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+```
+
+Sensitivity analysis:
+```{r}
+
+alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("HC", "CD", "UC"))
+alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("HC", "CD", "UC"))
+
+#Chao1:
+f_asv <- lm(Chao1_transformed ~ N_transformed + technical + Host_Age +host_body_mass_index+ smoking_status + Disease, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+
+#Shannon:
+f_asv <- lm(Shannon ~ N_transformed + technical + Host_Age+host_body_mass_index+ smoking_status + Disease, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+
+
+#Check: is there a significant difference between UC and CD?
+alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("UC", "HC", "CD"))
+alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("UC", "HC", "CD"))
+
+#Chao1
+f_asv <- lm(Chao1_transformed ~ N_transformed + technical+host_body_mass_index+ smoking_status + Host_Age + Disease, data=alpha_sub_Chao1, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+
+#Shannon, ASV
+f_asv <- lm(Shannon ~ N_transformed + technical+host_body_mass_index+ smoking_status + Host_Age + Disease, data=alpha_sub_Shannon, na.action = na.exclude)
+vif(f_asv)
+summary(f_asv)
+```
+
+
+## Ploting of results
+Alpha diversity:
+```{r}
+#Main: 
+project_list <- read.csv(paste0(path, "Metadata/Project_list.txt"), sep="\t")
+alpha_sub_Chao1 <- merge(alpha_sub_Chao1, project_list, by.x="BioProject", by.y="Project")
+alpha_sub_Shannon <- merge(alpha_sub_Shannon, project_list, by.x="BioProject", by.y="Project")
+
+alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("HC", "CD", "UC"))
+alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("HC", "CD", "UC"))
+
+ggplot(data=alpha_sub_Chao1)+
+  geom_boxplot(aes(x=Author, y=Chao1_transformed, color=Disease))+theme_classic() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("")+ylab("Chao1 (log transformed)")
+
+ggplot(data=alpha_sub_Shannon)+
+  geom_boxplot(aes(x=Author, y=Shannon, color=Disease))+theme_classic() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("")
+
+# Not divided by projects:
+alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("HC", "UC", "CD"))
+alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("HC", "UC", "CD"))
+
+p_val_ref <- tibble::tribble(
+  ~group1, ~group2, ~p.adj, ~y.position, 
+  "HC", "CD", "< 2e-16", 8.8, 
+  "HC", "UC", "< 2e-16", 8.2,
+  "CD", "UC", "1.3e-4", 8.2
+)
+
+p1 <- ggplot(data=alpha_sub_Chao1 %>% filter(!is.na(Disease)))+
+  geom_boxplot(aes(x=Disease, y=Chao1_transformed, color=Disease))+theme_classic()+ theme(legend.position="none")+xlab("") + ylab("Chao1 richness (log transformed)")+add_pvalue(p_val_ref)#+ scale_color_grey(start = 0.1, end = .8, na.value="black")
+
+p_val_ref2 <- tibble::tribble(
+  ~group1, ~group2, ~p.adj, ~y.position, 
+  "HC", "CD", "4.35e-13", 8, 
+  "HC", "UC", "5.03e-06", 7.4,
+  "CD", "UC", "0.364", 7.4
+)
+
+p2 <- ggplot(data=alpha_sub_Shannon %>% filter(!is.na(Disease)))+
+  geom_boxplot(aes(x=Disease, y=Shannon, color=Disease))+theme_classic()+ theme(legend.position="none")+xlab("") + ylab("Shannon diversity")+add_pvalue(p_val_ref2)#+ scale_color_grey(start = 0.1, end = .8, na.value="black")
+
+ggarrange(p1, p2)
+``` 
+
+
+
+## Analyze beta diversity
+### Analysis of technical features
+
+The beta diversity technical part is run on the super-computer, so outputs will not be shown -> it takes a long time to run! The results can be found in a separate folder. 
+```{r eval=FALSE, include=TRUE}
+ps_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+#ps_relab <- readRDS("./vol1/ps_total_relab.rds")
+
+df1 <- data.frame(sample_data(ps_relab))
+df1$N <- as.numeric(df1$N)
+
+#No permutation design based on BioProject! Because within the same BioProject, they will all have the same technical variables -> cannot permute within and test technical
+
+set.seed(1)
+#Bray Curtis:
+res1 <- adonis2(otu_table(ps_relab)~ Instrument + LibraryLayout + X16s_region + N, data=df1, method="bray", by="margin")
+write.table(res1, file = "./vol1/BrayCurtis_technical_margin.txt")
+
+set.seed(1)
+#Jaccard:
+res2 <- adonis2(otu_table(ps_relab)~ Instrument + LibraryLayout + X16s_region + N, data=df1, method="jaccard", by="margin", binary=T)
+write.table(res2, file = "./vol1/Jaccard_technical_margin.txt")
+
+set.seed(1)
+#Bray Curtis:
+res3 <- adonis2(otu_table(ps_relab)~ Instrument + LibraryLayout + X16s_region + N, data=df1, method="bray", by=NULL)
+write.table(res3, file = "./vol1/BrayCurtis_technical_full.txt")
+
+set.seed(1)
+#Jaccard:
+res4 <- adonis2(otu_table(ps_relab)~ Instrument + LibraryLayout + X16s_region + N, data=df1, method="jaccard", binary=T, by = NULL)
+write.table(res4, file = "./vol1/Jaccard_technical_full.txt")
+```
+
+### Analysis of biological covariates
+Technical effects are not included as covariates, as there is already corrected for them in the permutation design.
+```{r cache=TRUE}
+#Permutation design: Within, but not between projects
+#Here, it is okay to use adonis instead of adonis2 -> we will just use the sequential estimates since order doesn't matter, when there is just one variable (will save a lot of time!). 
+ps_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+
+#Sex
+ps_relab_sub <- subset_samples(ps_relab, !is.na(host_sex))
+df1 <- data.frame(sample_data(ps_relab_sub))
+df1$N <- as.numeric(df1$N)
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+host_sex, permutations = perm, data=df1, method="bray")
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+host_sex, permutations = perm, data=df1, method="jaccard", binary=T)
+
+#Age
+ps_relab_sub <- subset_samples(ps_relab, !is.na(Host_Age))
+df1 <- data.frame(sample_data(ps_relab_sub))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$N <- as.numeric(df1$N)
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+Host_Age, permutations = perm, data=df1, method="bray")
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+Host_Age, permutations = perm, data=df1, method="jaccard", binary=T)
+
+#Country
+ps_relab_sub <- subset_samples(ps_relab, !is.na(geo_loc_name_country))
+df1 <- data.frame(sample_data(ps_relab_sub))
+#Try something else with country/continent -> almost does not differ within the same project!
+df1$N <- as.numeric(df1$N)
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ Instrument + LibraryLayout + X16s_region + N + geo_loc_name_country, data=df1, method="bray")
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ Instrument + LibraryLayout + X16s_region + N + geo_loc_name_country, data=df1, method="jaccard", binary=T)
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ Instrument + LibraryLayout + X16s_region + N + geo_loc_name_country_continent, data=df1, method="bray")
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ Instrument + LibraryLayout + X16s_region + N + geo_loc_name_country_continent, data=df1, method="jaccard", binary=T)
+
+#BMI
+ps_relab_sub <- subset_samples(ps_relab, !is.na(host_body_mass_index))
+ps_relab_sub <- subset_samples(ps_relab_sub, host_body_mass_index<100)
+ps_relab_sub <- subset_samples(ps_relab_sub, host_body_mass_index>10)
+df1 <- data.frame(sample_data(ps_relab_sub))
+df1$host_body_mass_index <- as.numeric(df1$host_body_mass_index)
+df1$N <- as.numeric(df1$N)
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+host_body_mass_index, permutations = perm, data=df1, method="bray")
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+host_body_mass_index, permutations = perm, data=df1, method="jaccard", binary=T)
+
+#Smoking status
+ps_relab_sub <- subset_samples(ps_relab, !is.na(smoking_status))
+df1 <- data.frame(sample_data(ps_relab_sub))
+df1$N <- as.numeric(df1$N)
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+smoking_status, permutations = perm, data=df1, method="bray")
+
+set.seed(1)
+adonis(otu_table(ps_relab_sub)~ N+smoking_status, permutations = perm, data=df1, method="jaccard", binary=T)
+```
+
+### Analysis of the association between microbiome composition and disease status
+
+Main analysis:
+Also here, we can use adonis instead of adonis2. Just make sure, that Disease is in the end, so we capture the effect of disease after the effects of covariates are adjusted for!
+```{r cache=TRUE}
+
+ps_relab_sub <- subset_samples(ps_relab, !is.na(Disease))
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(Host_Age))
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(host_sex))
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(geo_loc_name_country)) #2518 samples
+
+df1 <- data.frame(sample_data(ps_relab_sub))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$N <- as.numeric(df1$N)
+
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+
+set.seed(1)
+#Bray Curtis:
+adonis(otu_table(ps_relab_sub)~ N+Host_Age + host_sex + geo_loc_name_country + Disease, data=df1, method="bray", permutations=perm)
+
+set.seed(1)
+#Jaccard:
+adonis(otu_table(ps_relab_sub)~ N+ Host_Age + host_sex + geo_loc_name_country + Disease, data=df1, method="jaccard", permutations=perm, binary=T)
+
+#Divide into HC+CD and HC+UC to test separately:
+ps_UC <- subset_samples(ps_relab_sub, Disease !="CD") #1827 samples
+ps_CD <- subset_samples(ps_relab_sub, Disease !="UC") #2275 samples
+
+#Test first CD vs. HC:
+df1 <- data.frame(sample_data(ps_CD))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$N <- as.numeric(df1$N)
+
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+set.seed(1)
+#Bray Curtis:
+adonis(otu_table(ps_CD)~ N+Host_Age + host_sex + geo_loc_name_country + Disease, data=df1, method="bray", permutations=perm)
+
+set.seed(1)
+#Jaccard:
+adonis(otu_table(ps_CD)~  N+Host_Age + host_sex + geo_loc_name_country + Disease, data=df1, method="jaccard", permutations=perm, binary=T)
+
+#Then UC vs. HC:
+df1 <- data.frame(sample_data(ps_UC))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$N <- as.numeric(df1$N)
+
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+set.seed(1)
+#Bray Curtis:
+adonis(otu_table(ps_UC)~ N+Host_Age + host_sex + geo_loc_name_country + Disease, data=df1, method="bray", permutations=perm)
+
+set.seed(1)
+#Jaccard:
+adonis(otu_table(ps_UC)~ N+ Host_Age + host_sex + geo_loc_name_country + Disease, data=df1, method="jaccard", permutations=perm, binary=T)
+```
+
+Sensitivity analysis:
+```{r cache=TRUE}
+ps_relab_sub <- subset_samples(ps_relab, !is.na(Disease))
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(Host_Age))
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(host_sex))
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(geo_loc_name_country)) 
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(host_body_mass_index))
+ps_relab_sub <- subset_samples(ps_relab_sub, host_body_mass_index<100)
+ps_relab_sub <- subset_samples(ps_relab_sub, host_body_mass_index>10)
+ps_relab_sub <- subset_samples(ps_relab_sub, !is.na(smoking_status)) #1602 samples!
+
+df1 <- data.frame(sample_data(ps_relab_sub))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$host_body_mass_index <- as.numeric(df1$host_body_mass_index)
+df1$N <- as.numeric(df1$N)
+
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+
+set.seed(1)
+#Bray Curtis:
+adonis(otu_table(ps_relab_sub)~ N+Host_Age + host_sex + host_body_mass_index +smoking_status + geo_loc_name_country + Disease, data=df1, method="bray", permutations=perm)
+
+set.seed(1)
+#Jaccard:
+adonis(otu_table(ps_relab_sub)~  N+Host_Age + host_sex + host_body_mass_index +smoking_status + geo_loc_name_country + Disease, data=df1, method="jaccard", permutations=perm, binary=T)
+
+#Divide into HC+CD and HC+UC to test separately:
+ps_UC <- subset_samples(ps_relab_sub, Disease !="CD") #1504 samples
+ps_CD <- subset_samples(ps_relab_sub, Disease !="UC") #1471 samples
+
+#Test first CD vs. HC:
+df1 <- data.frame(sample_data(ps_CD))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$host_body_mass_index <- as.numeric(df1$host_body_mass_index)
+df1$N <- as.numeric(df1$N)
+
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+set.seed(1)
+#Bray Curtis:
+adonis(otu_table(ps_CD)~ N+Host_Age + host_sex+ host_body_mass_index +smoking_status  + geo_loc_name_country + Disease, data=df1, method="bray", permutations=perm)
+
+set.seed(1)
+#Jaccard:
+adonis(otu_table(ps_CD)~  N+Host_Age + host_sex + host_body_mass_index +smoking_status + geo_loc_name_country + Disease, data=df1, method="jaccard", permutations=perm, binary=T)
+
+#Then UC vs. HC:
+df1 <- data.frame(sample_data(ps_UC))
+df1$Host_Age <- as.numeric(df1$Host_Age)
+df1$host_body_mass_index <- as.numeric(df1$host_body_mass_index)
+df1$N <- as.numeric(df1$N)
+
+perm <- how(within=Within(type="free"), plots=Plots(strata=df1$BioProject, type="none"), nperm=999)
+set.seed(1)
+#Bray Curtis:
+adonis(otu_table(ps_UC)~ N+Host_Age + host_sex + host_body_mass_index +smoking_status + geo_loc_name_country + Disease, data=df1, method="bray", permutations=perm)
+
+set.seed(1)
+#Jaccard:
+adonis(otu_table(ps_UC)~  N+Host_Age + host_sex + host_body_mass_index +smoking_status + geo_loc_name_country + Disease, data=df1, method="jaccard", permutations=perm, binary=T)
+```
+
+## Plot results
+```{r cache=TRUE}
+ps_relab_sub <- subset_samples(ps_relab, !(is.na(Disease)))
+to_hellinger <- as.data.frame(otu_table(ps_relab_sub))
+to_hellinger <- vegan::decostand(to_hellinger, method = "hellinger")
+to_hellinger[1:5, 1:5]
+ps_relab_plot <- phyloseq(otu_table(to_hellinger, taxa_are_rows = F), sample_data(ps_relab_sub), tax_table(ps_relab_sub))
+
+#Bray Curtis: 
+beta_div_relab_bray = phyloseq::distance(ps_relab_plot, method='bray')
+beta_div_relab_bray %>% as.vector %>% summary
+
+#Jaccard:
+beta_div_relab_jaccard = phyloseq::distance(ps_relab_plot, method='jaccard', binary = TRUE)
+beta_div_relab_jaccard %>% as.vector %>% summary
+```
+
+Plot NMDS:
+```{r cache=TRUE}
+#Bray Curtis
+set.seed(0)
+BRAY_NMDS_relab=metaMDS(beta_div_relab_bray, k=2,trymax=30)
+BRAY_NMDS_relab$stress #0.2046969
+
+data.scores = as.data.frame(scores(BRAY_NMDS_relab))
+data.scores$Disease <- sample_data(ps_relab_sub)$Disease
+data.scores$Disease <- factor(data.scores$Disease, levels = c("HC", "CD", "UC"))
+
+p1 <- ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Disease))+
+  geom_point(size=0.7)+theme_classic()+stat_ellipse(linetype="dashed", size=2)+ggtitle("Bray Curtis dissimilarity")
+p1
+
+#Jaccard:
+data.scores_jac <- read.csv( paste0(path, "data/IBD_project/beta_plot_Jaccard.txt"))
+JAC_NMDS_relab=metaMDS(beta_div_relab_jaccard,k=2,trymax=30)
+JAC_NMDS_relab$stress #0.1963084
+
+data.scores_jac = as.data.frame(scores(JAC_NMDS_relab))
+data.scores_jac$Disease <- sample_data(ps_relab_sub)$Disease
+data.scores_jac$Disease <- factor(data.scores_jac$Disease, levels = c("HC", "CD", "UC"))
+
+p2 <- ggplot(data=data.scores_jac, aes(x=NMDS1, y=NMDS2, color=Disease))+
+  geom_point(size=0.7)+theme_classic()+stat_ellipse(linetype="dashed", size=2)+ggtitle("Jaccard index")
+
+ggarrange(p1, p2, common.legend =T, legend = "right")
+
+
+write.csv(data.scores, paste0(path, "data/IBD_project/beta_plot_BrayCurtis.txt"), quote = F)
+write.csv(data.scores_jac, paste0(path, "data/IBD_project/beta_plot_Jaccard.txt"), quote = F)
+```
+

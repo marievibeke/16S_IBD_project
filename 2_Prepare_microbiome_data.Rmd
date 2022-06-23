@@ -1,0 +1,637 @@
+---
+title: "QC and preparation of data"
+output:
+  github_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+
+## Read in packages and data
+```{r message=FALSE, warning=FALSE, error=TRUE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(phyloseq)
+library(vegan)
+library(ggpubr)
+
+packageVersion("dplyr")
+packageVersion("tidyverse")
+packageVersion("ggplot2")
+packageVersion("phyloseq")
+packageVersion("vegan")
+packageVersion("ggpubr")
+
+path <- "C:/Users/FX76TZ/OneDrive - Aalborg Universitet/Mikrobiom korrelation/"
+```
+
+
+Read in all ps objects:
+```{r}
+meta_data <- read.csv(paste0(path, "Metadata/Metadata_IBD_full.txt"), sep="\t")
+colnames(meta_data)[1] <- "Run"
+
+df_single <- meta_data %>% filter(LibraryLayout == "SINGLE")
+df_paired <- meta_data %>% filter(LibraryLayout == "PAIRED")
+
+single_projects <- unique(df_single$BioProject)
+paired_projects <- unique(df_paired$BioProject)
+
+#Excluding those that failed:
+single_projects <- single_projects[c(1:5, 7:23)]
+paired_projects <- paired_projects[c(1:4, 6:10, 12:13, 15, 17:29)]
+projects <- unique(c(single_projects, paired_projects))
+
+for (i in single_projects){
+  assign(paste0("ps_count_single_", i), readRDS(paste0("./vol1/single/", i, "/ps_count_", i, ".rds")))
+} 
+
+for (i in paired_projects){
+  assign(paste0("ps_count_paired_", i), readRDS(paste0("./vol1/paired/", i, "/ps_count.rds")))
+} 
+
+```
+
+## QC based on read depth
+```{r cache=TRUE}
+
+#Histogram of sequencing depth
+for (i in single_projects){
+  p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 10000, linetype = "dashed")
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), p)
+  
+  print(paste0(i, ": ", min(sample_sums(eval(parse(text=paste0("ps_count_single_", i)))))))
+}
+
+sample_data(ps_count_single_PRJEB33711)$N <- sample_sums(ps_count_single_PRJEB33711)
+sample_data(ps_count_single_PRJNA596546)$N <- sample_sums(ps_count_single_PRJNA596546)
+sample_data(ps_count_single_PRJNA391149)$N <- sample_sums(ps_count_single_PRJNA391149)
+sample_data(ps_count_single_PRJDB4871)$N <- sample_sums(ps_count_single_PRJDB4871)
+sample_data(ps_count_single_PRJNA324147)$N <- sample_sums(ps_count_single_PRJNA324147)
+sample_data(ps_count_single_PRJNA603658)$N <- sample_sums(ps_count_single_PRJNA603658)
+sample_data(ps_count_single_PRJNA82109)$N <- sample_sums(ps_count_single_PRJNA82109)
+sample_data(ps_count_single_PRJNA514452)$N <- sample_sums(ps_count_single_PRJNA514452)
+sample_data(ps_count_single_PRJNA422193)$N <- sample_sums(ps_count_single_PRJNA422193)
+sample_data(ps_count_single_PRJEB11845)$N <- sample_sums(ps_count_single_PRJEB11845)
+sample_data(ps_count_single_PRJNA757573)$N <- sample_sums(ps_count_single_PRJNA757573)
+sample_data(ps_count_single_PRJNA368966)$N <- sample_sums(ps_count_single_PRJNA368966)
+sample_data(ps_count_single_PRJNA645883)$N <- sample_sums(ps_count_single_PRJNA645883)
+sample_data(ps_count_single_PRJEB33031)$N <- sample_sums(ps_count_single_PRJEB33031)
+sample_data(ps_count_single_PRJEB20520)$N <- sample_sums(ps_count_single_PRJEB20520)
+sample_data(ps_count_single_PRJNA380944)$N <- sample_sums(ps_count_single_PRJNA380944)
+sample_data(ps_count_single_PRJEB7166)$N <- sample_sums(ps_count_single_PRJEB7166)
+sample_data(ps_count_single_PRJEB7772)$N <- sample_sums(ps_count_single_PRJEB7772)
+sample_data(ps_count_single_PRJEB3206)$N <- sample_sums(ps_count_single_PRJEB3206)
+sample_data(ps_count_single_PRJNA316059)$N <- sample_sums(ps_count_single_PRJNA316059)
+sample_data(ps_count_single_PRJEB13680)$N <- sample_sums(ps_count_single_PRJEB13680)
+sample_data(ps_count_single_PRJEB11419)$N <- sample_sums(ps_count_single_PRJEB11419)
+
+for (i in paired_projects){
+  p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 10000, linetype = "dashed")
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"))
+  
+  print(paste0(i, ": ", min(sample_sums(eval(parse(text=paste0("ps_count_paired_", i)))))))
+}
+
+sample_data(ps_count_paired_PRJNA684584)$N <- sample_sums(ps_count_paired_PRJNA684584)
+sample_data(ps_count_paired_PRJNA679275)$N <- sample_sums(ps_count_paired_PRJNA679275)
+sample_data(ps_count_paired_PRJNA646271)$N <- sample_sums(ps_count_paired_PRJNA646271)
+sample_data(ps_count_paired_PRJNA450340)$N <- sample_sums(ps_count_paired_PRJNA450340)
+sample_data(ps_count_paired_PRJEB23261)$N <- sample_sums(ps_count_paired_PRJEB23261)
+sample_data(ps_count_paired_PRJNA431126)$N <- sample_sums(ps_count_paired_PRJNA431126)
+sample_data(ps_count_paired_PRJNA681685)$N <- sample_sums(ps_count_paired_PRJNA681685)
+sample_data(ps_count_paired_PRJNA610934)$N <- sample_sums(ps_count_paired_PRJNA610934)
+sample_data(ps_count_paired_PRJEB30521)$N <- sample_sums(ps_count_paired_PRJEB30521)
+sample_data(ps_count_paired_PRJNA565903)$N <- sample_sums(ps_count_paired_PRJNA565903)
+sample_data(ps_count_paired_PRJEB18780)$N <- sample_sums(ps_count_paired_PRJEB18780)
+sample_data(ps_count_paired_PRJEB38969)$N <- sample_sums(ps_count_paired_PRJEB38969)
+sample_data(ps_count_paired_PRJNA606913)$N <- sample_sums(ps_count_paired_PRJNA606913)
+sample_data(ps_count_paired_PRJNA596333)$N <- sample_sums(ps_count_paired_PRJNA596333)
+sample_data(ps_count_paired_PRJNA515212)$N <- sample_sums(ps_count_paired_PRJNA515212)
+sample_data(ps_count_paired_PRJEB21819)$N <- sample_sums(ps_count_paired_PRJEB21819)
+sample_data(ps_count_paired_PRJNA450540)$N <- sample_sums(ps_count_paired_PRJNA450540)
+sample_data(ps_count_paired_PRJNA428898)$N <- sample_sums(ps_count_paired_PRJNA428898)
+sample_data(ps_count_paired_PRJEB21593)$N <- sample_sums(ps_count_paired_PRJEB21593)
+sample_data(ps_count_paired_PRJNA388210)$N <- sample_sums(ps_count_paired_PRJNA388210)
+sample_data(ps_count_paired_PRJEB11841)$N <- sample_sums(ps_count_paired_PRJEB11841)
+sample_data(ps_count_paired_PRJEB14084)$N <- sample_sums(ps_count_paired_PRJEB14084)
+sample_data(ps_count_paired_PRJNA316059)$N <- sample_sums(ps_count_paired_PRJNA316059)
+sample_data(ps_count_paired_PRJNA414072)$N <- sample_sums(ps_count_paired_PRJNA414072)
+sample_data(ps_count_paired_PRJNA418765)$N <- sample_sums(ps_count_paired_PRJNA418765)
+
+
+#Based on the plots, I have chosen different thresholds of quality control based on read depth:
+single_10 <- single_projects[c(2, 5:6, 8:9, 11, 12:14, 16, 18, 20, 21)]
+single_4 <- single_projects[c(1, 10, 15, 17, 19, 22)]
+single_2 <- single_projects[c(3:4,7)]
+
+paired_5 <- paired_projects[c(1, 11, 17, 20, 23, 25)]
+paired_10 <- paired_projects[c(2:9, 10, 12:16, 18:19, 21:22, 24)]
+
+#New plotting + Remove sample with read depth below 10,000, 5,000, 4,000 or 2,000:
+for (i in single_10){
+    p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 10000, linetype = "dashed")+ggtitle(paste0("Single: ", i))
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  
+  assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=10000, eval(parse(text=paste0("ps_count_single_", i)))))
+  
+  saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
+ 
+  print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
+  }
+
+for (i in single_4){
+      p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 4000, linetype = "dashed")+ggtitle(paste0("Single: ", i))
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  
+  assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=4000, eval(parse(text=paste0("ps_count_single_", i)))))
+  
+  saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
+  
+  print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
+  }
+for (i in single_2){
+        p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 2000, linetype = "dashed")+ggtitle(paste0("Single: ", i))
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  
+  assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=2000, eval(parse(text=paste0("ps_count_single_", i)))))
+  
+  saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
+  
+  print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
+  }
+for (i in paired_10){
+        p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 10000, linetype = "dashed")+ggtitle(paste0("Paired: ", i))
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"), width = 3, height = 3)
+  
+  assign(paste0("ps_sub_paired_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))>=10000, eval(parse(text=paste0("ps_count_paired_", i)))))
+  
+  saveRDS(eval(parse(text=paste0("ps_sub_paired_", i))), paste0("./vol1/paired/ps_count_filtered_", i, ".rds"))
+  
+  print(dim(sample_data(eval(parse(text=paste0("ps_sub_paired_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_paired_", i)))))[1])
+}
+for (i in paired_5){
+          p <- ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 5000, linetype = "dashed")+ggtitle(paste0("Paired: ", i))
+  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"), width = 3, height = 3)
+  
+  assign(paste0("ps_sub_paired_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))>=5000, eval(parse(text=paste0("ps_count_paired_", i)))))
+  
+  saveRDS(eval(parse(text=paste0("ps_sub_paired_", i))), paste0("./vol1/paired/ps_count_filtered_", i, ".rds"))
+  
+  print(dim(sample_data(eval(parse(text=paste0("ps_sub_paired_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_paired_", i)))))[1])
+  }
+
+#Transform into relab and save:
+for (i in paired_projects){
+  assign(paste0("ps_relab_paired_", i), transform_sample_counts(eval(parse(text=paste0("ps_sub_paired_", i))), function(otu) otu/sum(otu)))
+  saveRDS(eval(parse(text=paste0("ps_relab_paired_", i))), paste0("./vol1/paired/ps_relab_filtered_", i, ".rds"))
+}
+for (i in single_projects){
+  assign(paste0("ps_relab_single_", i), transform_sample_counts(eval(parse(text=paste0("ps_sub_single_", i))), function(otu) otu/sum(otu)))
+  saveRDS(eval(parse(text=paste0("ps_relab_single_", i))), paste0("./vol1/single/ps_relab_filtered_", i, ".rds"))
+}
+```
+
+## Calculate alpha diversity (based on counts):
+```{r warning=FALSE, cache=TRUE}
+#Calculate alpha div based on counts
+alpha_df <- data.frame()
+for (i in single_projects[1:21]){
+  alpha_div <- estimate_richness(eval(parse(text=paste0("ps_sub_single_", i))), measures=c("Chao1", "Shannon", "InvSimpson", "Observed"))
+  alpha_div$Run <- row.names(alpha_div)
+  alpha_df <- rbind(alpha_df, alpha_div)
+}
+
+for (i in paired_projects){
+  alpha_div <- estimate_richness(eval(parse(text=paste0("ps_sub_paired_", i))), measures=c("Chao1", "Shannon", "InvSimpson", "Observed"))
+  alpha_div$Run <- row.names(alpha_div)
+  alpha_df <- rbind(alpha_df, alpha_div)
+}
+
+head(alpha_df)
+dim(alpha_df) #4154 samples
+summary(alpha_df$Chao1)
+
+meta_data_total <- merge(meta_data, alpha_df, by.x="Run", by.y="Run") 
+dim(meta_data_total) #3916 samples
+
+# Save alpha diversity
+write.table(meta_data_total, paste0("./vol1/AlphaDiv_ASV.txt"), col.names = T, row.names = F, quote = F, sep = '\t')
+
+#Do the same with at genus level
+alpha_df_genus <- data.frame()
+for (i in paired_projects){
+  print(i)
+  assign(paste0("ps_genus_paired_", i), tax_glom(eval(parse(text=paste0("ps_sub_paired_", i))), taxrank="Genus"))
+  alpha_div <- estimate_richness(eval(parse(text=paste0("ps_genus_paired_", i))), measures=c("Chao1", "Shannon", "InvSimpson", "Observed"))
+  alpha_div$Run <- row.names(alpha_div)
+  alpha_df_genus <- rbind(alpha_df_genus, alpha_div)
+}
+for (i in single_projects){
+  print(i)
+  assign(paste0("ps_genus_single_", i), tax_glom(eval(parse(text=paste0("ps_sub_single_", i))), taxrank="Genus"))
+  alpha_div <- estimate_richness(eval(parse(text=paste0("ps_genus_single_", i))), measures=c("Chao1", "Shannon", "InvSimpson", "Observed"))
+  alpha_div$Run <- row.names(alpha_div)
+  alpha_df_genus <- rbind(alpha_df_genus, alpha_div)
+}
+
+head(alpha_df_genus)
+dim(alpha_df_genus) #4154 samples
+summary(alpha_df_genus$Chao1)
+
+meta_data_genus <- merge(meta_data, alpha_df_genus, by.x="Run", by.y="Run")
+
+dim(meta_data_genus) #3916 samples
+
+# Save alpha diversity
+write.table(meta_data_genus, paste0("./vol1/AlphaDiv_Genus.txt"), col.names = T, row.names = F, quote = F, sep = '\t')
+
+```
+
+## Plots of alpha diversity
+```{r}
+#Investigate ASV level:
+ggplot(data=meta_data_total)+
+  geom_histogram(aes(x=Chao1), color="black", fill = "lightblue", bins=40)+theme_classic()+xlab("Chao1 richness")+ylab("Count")
+
+ggplot(data=meta_data_total)+
+  geom_histogram(aes(x=Shannon), color="black", fill = "lightblue", bins=40)+theme_classic()+xlab("Shannon diversity")+ylab("Count")
+
+ggplot(data=meta_data_total)+
+  geom_histogram(aes(x=InvSimpson), color="black", fill = "lightblue", bins=40)+theme_classic()+xlab("Inv. Simpson")+ylab("Count")
+
+#Investigate Genus level:
+ggplot(data=meta_data_genus)+
+  geom_histogram(aes(x=Chao1), color="black", fill = "lightblue", bins=40)+theme_classic()+xlab("Chao1 richness")+ylab("Count")
+
+ggplot(data=meta_data_genus)+
+  geom_histogram(aes(x=Shannon), color="black", fill = "lightblue", bins=40)+theme_classic()+xlab("Shannon diversity")+ylab("Count")
+
+ggplot(data=meta_data_genus)+
+  geom_histogram(aes(x=InvSimpson), color="black", fill = "lightblue", bins=40)+theme_classic()+xlab("Inv. Simpson")+ylab("Count")
+
+```
+
+## Combination of all data into one dataframe
+Agglomerate and combine all data:
+```{r warning=FALSE, cache=TRUE}
+
+#Change the naming of the ASV from AVS1, 2 etc. to the Family name and the Genus name: 
+taxa_names(ps_genus_single_PRJEB33711) <- paste0(tax_table(ps_genus_single_PRJEB33711)[, "Family"], "_", tax_table(ps_genus_single_PRJEB33711)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA596546) <- paste0(tax_table(ps_genus_single_PRJNA596546)[, "Family"], "_", tax_table(ps_genus_single_PRJNA596546)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA391149) <- paste0(tax_table(ps_genus_single_PRJNA391149)[, "Family"], "_", tax_table(ps_genus_single_PRJNA391149)[, "Genus"])
+taxa_names(ps_genus_single_PRJDB4871) <- paste0(tax_table(ps_genus_single_PRJDB4871)[, "Family"], "_", tax_table(ps_genus_single_PRJDB4871)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA324147) <- paste0(tax_table(ps_genus_single_PRJNA324147)[, "Family"], "_", tax_table(ps_genus_single_PRJNA324147)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA603658) <- paste0(tax_table(ps_genus_single_PRJNA603658)[, "Family"], "_", tax_table(ps_genus_single_PRJNA603658)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA82109) <- paste0(tax_table(ps_genus_single_PRJNA82109)[, "Family"], "_", tax_table(ps_genus_single_PRJNA82109)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA514452) <- paste0(tax_table(ps_genus_single_PRJNA514452)[, "Family"], "_", tax_table(ps_genus_single_PRJNA514452)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA422193) <- paste0(tax_table(ps_genus_single_PRJNA422193)[, "Family"], "_", tax_table(ps_genus_single_PRJNA422193)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB11845) <- paste0(tax_table(ps_genus_single_PRJEB11845)[, "Family"], "_", tax_table(ps_genus_single_PRJEB11845)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA757573) <- paste0(tax_table(ps_genus_single_PRJNA757573)[, "Family"], "_", tax_table(ps_genus_single_PRJNA757573)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA368966) <- paste0(tax_table(ps_genus_single_PRJNA368966)[, "Family"], "_", tax_table(ps_genus_single_PRJNA368966)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA645883) <- paste0(tax_table(ps_genus_single_PRJNA645883)[, "Family"], "_", tax_table(ps_genus_single_PRJNA645883)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB33031) <- paste0(tax_table(ps_genus_single_PRJEB33031)[, "Family"], "_", tax_table(ps_genus_single_PRJEB33031)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB20520) <- paste0(tax_table(ps_genus_single_PRJEB20520)[, "Family"], "_", tax_table(ps_genus_single_PRJEB20520)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA380944) <- paste0(tax_table(ps_genus_single_PRJNA380944)[, "Family"], "_", tax_table(ps_genus_single_PRJNA380944)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB7166) <- paste0(tax_table(ps_genus_single_PRJEB7166)[, "Family"], "_", tax_table(ps_genus_single_PRJEB7166)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB7772) <- paste0(tax_table(ps_genus_single_PRJEB7772)[, "Family"], "_", tax_table(ps_genus_single_PRJEB7772)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB3206) <- paste0(tax_table(ps_genus_single_PRJEB3206)[, "Family"], "_", tax_table(ps_genus_single_PRJEB3206)[, "Genus"])
+taxa_names(ps_genus_single_PRJNA316059) <- paste0(tax_table(ps_genus_single_PRJNA316059)[, "Family"], "_", tax_table(ps_genus_single_PRJNA316059)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB13680) <- paste0(tax_table(ps_genus_single_PRJEB13680)[, "Family"], "_", tax_table(ps_genus_single_PRJEB13680)[, "Genus"])
+taxa_names(ps_genus_single_PRJEB11419) <- paste0(tax_table(ps_genus_single_PRJEB11419)[, "Family"], "_", tax_table(ps_genus_single_PRJEB11419)[, "Genus"])
+
+taxa_names(ps_genus_paired_PRJNA684584) <- paste0(tax_table(ps_genus_paired_PRJNA684584)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA684584)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA679275) <- paste0(tax_table(ps_genus_paired_PRJNA679275)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA679275)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA646271) <- paste0(tax_table(ps_genus_paired_PRJNA646271)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA646271)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA450340) <- paste0(tax_table(ps_genus_paired_PRJNA450340)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA450340)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB23261) <- paste0(tax_table(ps_genus_paired_PRJEB23261)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB23261)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA431126) <- paste0(tax_table(ps_genus_paired_PRJNA431126)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA431126)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA681685) <- paste0(tax_table(ps_genus_paired_PRJNA681685)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA681685)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA610934) <- paste0(tax_table(ps_genus_paired_PRJNA610934)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA610934)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB30521) <- paste0(tax_table(ps_genus_paired_PRJEB30521)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB30521)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA565903) <- paste0(tax_table(ps_genus_paired_PRJNA565903)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA565903)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB18780) <- paste0(tax_table(ps_genus_paired_PRJEB18780)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB18780)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB38969) <- paste0(tax_table(ps_genus_paired_PRJEB38969)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB38969)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA606913) <- paste0(tax_table(ps_genus_paired_PRJNA606913)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA606913)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA596333) <- paste0(tax_table(ps_genus_paired_PRJNA596333)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA596333)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA515212) <- paste0(tax_table(ps_genus_paired_PRJNA515212)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA515212)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB21819) <- paste0(tax_table(ps_genus_paired_PRJEB21819)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB21819)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA450540) <- paste0(tax_table(ps_genus_paired_PRJNA450540)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA450540)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA428898) <- paste0(tax_table(ps_genus_paired_PRJNA428898)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA428898)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB21593) <- paste0(tax_table(ps_genus_paired_PRJEB21593)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB21593)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA388210) <- paste0(tax_table(ps_genus_paired_PRJNA388210)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA388210)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB11841) <- paste0(tax_table(ps_genus_paired_PRJEB11841)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB11841)[, "Genus"])
+taxa_names(ps_genus_paired_PRJEB14084) <- paste0(tax_table(ps_genus_paired_PRJEB14084)[, "Family"], "_", tax_table(ps_genus_paired_PRJEB14084)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA316059) <- paste0(tax_table(ps_genus_paired_PRJNA316059)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA316059)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA414072) <- paste0(tax_table(ps_genus_paired_PRJNA414072)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA414072)[, "Genus"])
+taxa_names(ps_genus_paired_PRJNA418765) <- paste0(tax_table(ps_genus_paired_PRJNA418765)[, "Family"], "_", tax_table(ps_genus_paired_PRJNA418765)[, "Genus"])
+
+
+
+#Combine all the projects into one!:
+ps_total <- eval(parse(text=paste0("ps_genus_single_", single_projects[1])))
+for (i in single_projects[2:22]){
+  ps_total <- merge_phyloseq(ps_total, eval(parse(text=paste0("ps_genus_single_", i))))
+}
+for (i in paired_projects){
+  ps_total <- merge_phyloseq(ps_total, eval(parse(text=paste0("ps_genus_paired_", i))))
+}
+
+ps_total #4154 samples
+head(sample_data(ps_total))
+otu_table(ps_total)[1:7, 1:7]
+tax_table(ps_total)[1:7, 1:7]
+
+#Update with latest version of meta data:
+read_depth <- as.data.frame(as.matrix(sample_data(ps_total))) %>% dplyr::select(Run, N)
+sam <- merge(meta_data, read_depth, by.x="Run", by.y = "Run")
+sam <- distinct(sam)
+row.names(sam) <- sam$Run
+ps_total <- phyloseq(otu_table(ps_total), sample_data(sam), tax_table(ps_total)) #3916 samples
+
+#Remove samples with less than 2000 counts
+ggplot()+
+  geom_histogram(mapping=aes(sample_sums(ps_total)), fill = "lightskyblue1", color="black", bins = 250)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 2000, linetype = "dashed")
+
+sum(sample_sums(ps_total)<=2000) / dim(sample_data(ps_total))[1]
+ps_total <- prune_samples(sample_sums(ps_total) > 2000, ps_total) #3909 samples
+
+#Save
+saveRDS(ps_total, paste0("./vol1/ps_total_count.rds"))
+
+######################################################################################
+#Do the same for relab:
+
+for (i in single_projects){
+  assign(paste0("ps_genus_single_relab_", i), tax_glom(eval(parse(text=paste0("ps_relab_single_", i))), taxrank="Genus"))
+}
+for (i in paired_projects){
+  assign(paste0("ps_genus_paired_relab_", i), tax_glom(eval(parse(text=paste0("ps_relab_paired_", i))), taxrank="Genus"))
+}
+
+#Change the naming of the ASV from AVS1, 2 etc. to the Family name and the Genus name: 
+taxa_names(ps_genus_single_relab_PRJEB33711) <- paste0(tax_table(ps_genus_single_relab_PRJEB33711)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB33711)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA596546) <- paste0(tax_table(ps_genus_single_relab_PRJNA596546)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA596546)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA391149) <- paste0(tax_table(ps_genus_single_relab_PRJNA391149)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA391149)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJDB4871) <- paste0(tax_table(ps_genus_single_relab_PRJDB4871)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJDB4871)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA324147) <- paste0(tax_table(ps_genus_single_relab_PRJNA324147)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA324147)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA603658) <- paste0(tax_table(ps_genus_single_relab_PRJNA603658)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA603658)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA82109) <- paste0(tax_table(ps_genus_single_relab_PRJNA82109)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA82109)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA514452) <- paste0(tax_table(ps_genus_single_relab_PRJNA514452)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA514452)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA422193) <- paste0(tax_table(ps_genus_single_relab_PRJNA422193)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA422193)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB11845) <- paste0(tax_table(ps_genus_single_relab_PRJEB11845)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB11845)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA757573) <- paste0(tax_table(ps_genus_single_relab_PRJNA757573)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA757573)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA368966) <- paste0(tax_table(ps_genus_single_relab_PRJNA368966)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA368966)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA645883) <- paste0(tax_table(ps_genus_single_relab_PRJNA645883)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA645883)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB33031) <- paste0(tax_table(ps_genus_single_relab_PRJEB33031)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB33031)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB20520) <- paste0(tax_table(ps_genus_single_relab_PRJEB20520)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB20520)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA380944) <- paste0(tax_table(ps_genus_single_relab_PRJNA380944)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA380944)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB7166) <- paste0(tax_table(ps_genus_single_relab_PRJEB7166)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB7166)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB7772) <- paste0(tax_table(ps_genus_single_relab_PRJEB7772)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB7772)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB3206) <- paste0(tax_table(ps_genus_single_relab_PRJEB3206)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB3206)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJNA316059) <- paste0(tax_table(ps_genus_single_relab_PRJNA316059)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJNA316059)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB13680) <- paste0(tax_table(ps_genus_single_relab_PRJEB13680)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB13680)[, "Genus"])
+taxa_names(ps_genus_single_relab_PRJEB11419) <- paste0(tax_table(ps_genus_single_relab_PRJEB11419)[, "Family"], "_", tax_table(ps_genus_single_relab_PRJEB11419)[, "Genus"])
+
+taxa_names(ps_genus_paired_relab_PRJNA684584) <- paste0(tax_table(ps_genus_paired_relab_PRJNA684584)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA684584)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA679275) <- paste0(tax_table(ps_genus_paired_relab_PRJNA679275)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA679275)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA646271) <- paste0(tax_table(ps_genus_paired_relab_PRJNA646271)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA646271)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA450340) <- paste0(tax_table(ps_genus_paired_relab_PRJNA450340)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA450340)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB23261) <- paste0(tax_table(ps_genus_paired_relab_PRJEB23261)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB23261)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA431126) <- paste0(tax_table(ps_genus_paired_relab_PRJNA431126)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA431126)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA681685) <- paste0(tax_table(ps_genus_paired_relab_PRJNA681685)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA681685)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA610934) <- paste0(tax_table(ps_genus_paired_relab_PRJNA610934)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA610934)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB30521) <- paste0(tax_table(ps_genus_paired_relab_PRJEB30521)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB30521)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA565903) <- paste0(tax_table(ps_genus_paired_relab_PRJNA565903)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA565903)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB18780) <- paste0(tax_table(ps_genus_paired_relab_PRJEB18780)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB18780)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB38969) <- paste0(tax_table(ps_genus_paired_relab_PRJEB38969)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB38969)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA606913) <- paste0(tax_table(ps_genus_paired_relab_PRJNA606913)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA606913)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA596333) <- paste0(tax_table(ps_genus_paired_relab_PRJNA596333)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA596333)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA515212) <- paste0(tax_table(ps_genus_paired_relab_PRJNA515212)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA515212)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB21819) <- paste0(tax_table(ps_genus_paired_relab_PRJEB21819)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB21819)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA450540) <- paste0(tax_table(ps_genus_paired_relab_PRJNA450540)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA450540)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA428898) <- paste0(tax_table(ps_genus_paired_relab_PRJNA428898)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA428898)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB21593) <- paste0(tax_table(ps_genus_paired_relab_PRJEB21593)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB21593)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA388210) <- paste0(tax_table(ps_genus_paired_relab_PRJNA388210)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA388210)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB11841) <- paste0(tax_table(ps_genus_paired_relab_PRJEB11841)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB11841)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJEB14084) <- paste0(tax_table(ps_genus_paired_relab_PRJEB14084)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJEB14084)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA316059) <- paste0(tax_table(ps_genus_paired_relab_PRJNA316059)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA316059)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA414072) <- paste0(tax_table(ps_genus_paired_relab_PRJNA414072)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA414072)[, "Genus"])
+taxa_names(ps_genus_paired_relab_PRJNA418765) <- paste0(tax_table(ps_genus_paired_relab_PRJNA418765)[, "Family"], "_", tax_table(ps_genus_paired_relab_PRJNA418765)[, "Genus"])
+
+
+#Combine:
+ps_total_relab <- eval(parse(text=paste0("ps_genus_single_relab_", single_projects[1])))
+for (i in single_projects[2:22]){
+  ps_total_relab <- merge_phyloseq(ps_total_relab, eval(parse(text=paste0("ps_genus_single_relab_", i))))
+}
+for (i in paired_projects){
+  ps_total_relab <- merge_phyloseq(ps_total_relab, eval(parse(text=paste0("ps_genus_paired_relab_", i))))
+}
+
+ps_total_relab <- phyloseq(otu_table(ps_total_relab), sample_data(sam), tax_table(ps_total_relab))
+
+#Remove the same as removed in the count ps:
+removed <- setdiff(sample_data(ps_total_relab)$Run, sample_data(ps_total)$Run)
+ps_total_relab <- subset_samples(ps_total_relab, !(Run %in% removed))
+
+saveRDS(ps_total_relab, paste0("./vol1/ps_total_relab.rds"))
+```
+
+## Stacked bar plots
+```{r}
+ps_total_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+#Based on Phylum
+temp <- ps_total_relab %>% tax_glom(taxrank = "Phylum") %>% psmelt() %>% filter(Abundance > 0.02)
+
+ggplot(temp)+
+  geom_bar(aes(x=Sample, y= Abundance, fill = Phylum), stat = "identity", position = "stack")+
+  xlab("Participants")+theme_classic()+ theme(axis.text.x=element_blank()) 
+
+#Based on Genus:
+temp <- ps_total_relab %>% tax_glom(taxrank = "Genus") %>% psmelt()%>% filter(Abundance > 0.02)
+ggplot(temp)+
+  geom_bar(aes(x=Sample, y= Abundance, fill=Genus), stat = "identity", position = "stack")+
+  xlab("Participants")+theme_classic()+ theme(axis.text.x=element_blank())+theme(legend.position = "none")
+```
+
+
+## Calculation of beta diversity
+```{r cache = TRUE}
+#ps_total_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+#Bray Curtis: 
+beta_div_relab_bray = phyloseq::distance(ps_total_relab, method='bray')
+beta_div_relab_bray %>% as.vector %>% summary
+
+#Jaccard:
+beta_div_relab_jaccard = phyloseq::distance(ps_total_relab, method='jaccard', binary = TRUE)
+beta_div_relab_jaccard %>% as.vector %>% summary
+```
+
+## Visualize beta diversity in NMDS plots
+```{r cache = TRUE}
+#Bray Curtis
+# k=2, stress = 0.2273045
+BRAY_NMDS_relab=metaMDS(beta_div_relab_bray, k=2,trymax=30)
+BRAY_NMDS_relab$stress
+
+data.scores = as.data.frame(scores(BRAY_NMDS_relab))
+data.scores$project <- sample_data(ps_total_relab)$BioProject
+data.scores$V_region <- sample_data(ps_total_relab)$X16s_region
+data.scores$Layout <- sample_data(ps_total_relab)$LibraryLayout
+data.scores$Instrument <- sample_data(ps_total_relab)$Instrument
+
+#Plots:
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=project))+
+  geom_point(size=1)+theme_classic()
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=V_region))+
+  geom_point(size=1)+theme_classic()
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Instrument))+
+  geom_point(size=1)+theme_classic()
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Layout))+
+  geom_point(size=1)+theme_classic()
+
+
+#Jaccard:
+JAC_NMDS_relab=metaMDS(beta_div_relab_jaccard,k=2,trymax=30)
+JAC_NMDS_relab$stress
+# k=2, stress = 0.2007563
+
+data.scores = as.data.frame(scores(JAC_NMDS_relab))
+data.scores$project <- sample_data(ps_total_relab)$BioProject
+data.scores$V_region <- sample_data(ps_total_relab)$X16s_region
+data.scores$Layout <- sample_data(ps_total_relab)$LibraryLayout
+data.scores$Instrument <- sample_data(ps_total_relab)$Instrument
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=project))+
+  geom_point(size=1)+theme_classic()
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=V_region))+
+  geom_point(size=1)+theme_classic()
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Instrument))+
+  geom_point(size=1)+theme_classic()
+
+ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Layout))+
+  geom_point(size=1)+theme_classic()
+
+```
+
+## Overview of samples
+```{r}
+df <- as.data.frame(as.matrix(sample_data(ps_total_relab)))
+
+#Check stats:
+table(df$Disease, useNA = "always")
+length(unique(df$SRA.Study))
+table(df$host_sex, useNA = "always")
+table(df$smoking_status, useNA = "always")
+unique(df$geo_loc_name_country)
+unique(df$geo_loc_name_country_continent)
+
+#Split by disease -> check samples, gender, age, BMI, smoking
+df_UC <- df %>% filter(Disease == "UC")
+df_CD <- df %>% filter(Disease == "CD")
+df_HC <- df %>% filter(Disease == "HC")
+df_NA <- df %>% filter(is.na(Disease))
+
+table(df_UC$host_sex, useNA = "always")
+table(df_CD$host_sex, useNA = "always")
+table(df_HC$host_sex, useNA = "always")
+table(df_NA$host_sex, useNA = "always")
+      
+summary(as.numeric(df_UC$Host_Age))
+summary(as.numeric(df_CD$Host_Age))
+summary(as.numeric(df_HC$Host_Age))
+summary(as.numeric(df_NA$Host_Age))
+
+summary(as.numeric(df_UC$host_body_mass_index))
+summary(as.numeric(df_CD$host_body_mass_index))
+summary(as.numeric(df_HC$host_body_mass_index))
+summary(as.numeric(df_NA$host_body_mass_index))
+
+table(df_UC$smoking_status, useNA = "always")
+table(df_CD$smoking_status, useNA = "always")
+table(df_HC$smoking_status, useNA = "always")
+table(df_NA$smoking_status, useNA = "always")
+
+
+#Make plots:
+df_projects <- df %>% dplyr::group_by(X16s_region, Instrument) %>% summarise(samples = n(), projects = length(unique(BioProject)))
+df_projects$X16s_region
+df_projects[6, "X16s_region"] <- "All"
+
+p1 <- ggplot(data=df_projects)+
+  geom_bar(aes(x=reorder(X16s_region,-projects, sum), y=projects, fill=Instrument), stat="identity")+xlab("16S V-region")+ylab("Studies")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggplot(data=df_projects)+
+  geom_bar(aes(x=reorder(X16s_region,-samples), y=samples), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()
+
+df_projects <- df %>% dplyr::group_by(X16s_region, BioProject) %>% summarise(samples = n())
+df_projects$X16s_region
+df_projects[10, "X16s_region"] <- "All"
+
+ggplot(data=df_projects)+
+  geom_bar(aes(x=reorder(X16s_region,-samples, sum), y=samples, fill=BioProject), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()+theme(legend.position = "none")
+
+df_projects <- df %>% dplyr::group_by(X16s_region, Disease) %>% summarise(samples = n())
+df_projects$X16s_region
+df_projects[8:9, "X16s_region"] <- "All"
+
+p3 <- ggplot(data=df_projects)+
+  geom_bar(aes(x=reorder(X16s_region,-samples, sum), y=samples, fill=Disease), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+df_projects <- df %>% dplyr::group_by(X16s_region, Instrument) %>% summarise(samples = n())
+df_projects$X16s_region
+df_projects[6, "X16s_region"] <- "All"
+
+ggplot(data=df_projects)+
+  geom_bar(aes(x=reorder(X16s_region,-samples, sum), y=samples, fill=Instrument), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()
+
+df_disease <- df %>% dplyr::group_by(Disease, host_sex) %>% summarise(samples = n())
+
+
+p4 <- ggplot(data=df_disease)+
+  geom_bar(aes(x=reorder(Disease,-samples, sum), y=samples, fill=host_sex), stat="identity")+xlab("Disease status")+ylab("Total samples")+theme_classic()+labs(fill="Gender")
+
+df_instrument <-  df %>% dplyr::group_by(Instrument, LibraryLayout) %>% summarise(samples = n())
+p2 <- ggplot(data=df_instrument)+
+  geom_bar(aes(x=reorder(Instrument,-samples, sum), y=samples, fill=LibraryLayout), stat="identity")+xlab("Instrument")+ylab("Total samples")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+labs(fill="Layout")
+
+ggarrange(p1, p2, p3, p4, labels=c("A", "B", "C", "D"))
+q1 <- p1+scale_fill_grey(start = 0, end = .9, na.value="black")
+q2 <- p2+ scale_fill_grey(start = 0.2, end = .7, na.value="black")
+q3 <- p3+ scale_fill_grey(start = 0.3, end = .9, na.value="black")
+q4 <- p4+ scale_fill_grey(start = 0.5, end = .7, na.value="black")
+ggarrange(q1, q2, q3, q4, labels=c("A", "B", "C", "D"))
+
+```
+

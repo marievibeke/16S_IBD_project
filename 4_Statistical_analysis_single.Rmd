@@ -1,0 +1,1667 @@
+---
+title: "Statistical analysis: Single Genus"
+output:
+  github_document:
+    toc: true
+editor_options:
+  chunk_output_type: console
+---
+
+
+## Read in packages and data
+```{r message=FALSE, warning=FALSE, error=TRUE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(phyloseq)
+library(ggpubr)
+
+packageVersion("tidyverse")
+packageVersion("ggplot2")
+packageVersion("dplyr")
+packageVersion("phyloseq")
+packageVersion("ggpubr")
+
+library(pscl)
+packageVersion("pscl")
+library(Maaslin2)
+packageVersion("Maaslin2")
+library(ANCOMBC)
+packageVersion("ANCOMBC")
+
+path <- "C:/Users/FX76TZ/OneDrive - Aalborg Universitet/Mikrobiom korrelation/"
+ps_count <- readRDS(paste0(path, "data/IBD_project/ps_total_count.rds"))
+ps_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+```
+
+## How to reduce the number of genera tested??
+```{r}
+ps_reduced <- subset_samples(ps_relab, !is.na(Disease))
+ps_reduced <- subset_samples(ps_reduced, !is.na(geo_loc_name_country))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_sex))
+ps_reduced <- subset_samples(ps_reduced, !is.na(Host_Age)) #2518 samples, 1345 taxa
+
+genus <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+genus[1:5, 1:5]
+#Remove columns with no count in any sample:
+genus1 <- genus[,colSums(genus)!=0] #796 taxa
+
+#Remove columns, where the genus is present in less than 10% of the samples:
+sum(sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]>0.90)
+genus <- genus1[, sapply(genus1, function(x) sum(x==0)) / dim(genus1)[1]<0.90] #144 taxa
+
+ps_relab_reduced <- phyloseq(otu_table(genus, taxa_are_rows=F), sample_data(ps_reduced), tax_table(ps_reduced))
+
+#Repeat for count:
+genus1 <- as.data.frame(as.matrix(otu_table(ps_count)))
+genus1 <- genus1 %>% dplyr::select(colnames(genus))
+ps_count_reduced <-  phyloseq(otu_table(genus1, taxa_are_rows=F), sample_data(ps_count), tax_table(ps_count))
+
+```
+
+
+## Single Genus analysis
+### NBZI
+```{r}
+ps_reduced <- subset_samples(ps_count_reduced, !is.na(Disease))
+ps_reduced <- subset_samples(ps_reduced, !is.na(geo_loc_name_country))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_sex))
+ps_reduced <- subset_samples(ps_reduced, !is.na(Host_Age))  #2518 samples! 144 taxa
+
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent)
+meta$Disease <- factor(meta$Disease, levels = c("HC", "CD", "UC"))
+
+res_CD <- data.frame()
+res_UC <- data.frame()
+res_CD_zi <- data.frame()
+res_UC_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+Disease, offset = log(N), data=meta, dist="negbin")
+  summary(f)
+  f1 <- summary(f)
+  sum(genera[,i]==0)/2518
+  summary(genera[,i])
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC <- rbind(res_UC, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC_zi <- rbind(res_UC_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_UC$padj <- p.adjust(res_UC$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+res_UC_zi$padj <- p.adjust(res_UC_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_UC <- res_UC %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+sig_UC_zi <- res_UC_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_UC$bug, sig_CD_zi$bug, sig_UC_zi$bug))) #128 significant out of 144-11 = 133
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+sig_CD <- res_CD %>% filter(padj < 10e-8)
+sig_CD_zi <- res_CD_zi %>% filter(padj < 10e-8)
+sig_UC <- res_UC %>% filter(padj < 10e-8)
+sig_UC_zi <- res_UC_zi %>% filter(padj < 10e-8)
+length(unique(c(sig_CD$bug, sig_CD_zi$bug, sig_UC$bug, sig_UC_zi$bug))) #71 significant
+
+tax_tab <- as.data.frame(tax_table(ps_reduced))
+tax_tab$bugs <- row.names(tax_tab)
+res_CD <- merge(res_CD, tax_tab, by.x="bug", by.y ="bugs")
+res_UC <- merge(res_UC, tax_tab, by.x="bug", by.y ="bugs")
+res_CD_ZI <- merge(res_CD_zi, tax_tab, by.x="bug", by.y ="bugs")
+res_UC_ZI <- merge(res_UC_zi, tax_tab, by.x="bug", by.y ="bugs")
+
+res_CD_ZI$Estimate2 <- -res_CD_ZI$Estimate
+res_UC_ZI$Estimate2 <- -res_UC_ZI$Estimate
+res_CD$Estimate2 <- res_CD$Estimate
+res_UC$Estimate2 <- res_UC$Estimate
+
+res_CD$part <- "Crohn's disease, NB"
+res_CD_ZI$part <- "Crohn's disease, ZI"
+res_UC$part <- "Ulcerative colitis, NB"
+res_UC_ZI$part <- "Ulcerative colitis, ZI"
+res_combined <- rbind(res_CD, res_CD_ZI, res_UC, res_UC_ZI)
+res_combined <- res_combined %>% filter(!is.na(padj))
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_NBZI_CD.txt"), col.names=T, row.names=F)
+write.table(res_CD_ZI, paste0(path, "results/Single_genus_NBZI_CD_ZI.txt"), col.names=T, row.names=F)
+write.table(res_UC, paste0(path, "results/Single_genus_NBZI_UC.txt"), col.names=T, row.names=F)
+write.table(res_UC_ZI, paste0(path, "results/Single_genus_NBZI_UC_ZI.txt"), col.names=T, row.names=F)
+
+```
+
+### MaAsLin2:
+```{r}
+#samples as rows, factorize!
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("HC", "CD", "UC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex"), reference = "Disease,HC")
+
+res <- read.csv("MaAsLin2_output/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+
+write.table(res, paste0(path, "results/Single_genus_MaAsLin2.txt"), col.names=T, row.names=F)
+```
+
+### ANCOM-II: Use ANCOM-BC
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("HC", "CD", "UC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F)
+
+ancom_q <- res_ancom$res$q_val
+sum(ancom_q$DiseaseCD< 0.05) #95 significant
+sum(ancom_q$DiseaseUC< 0.05) #88 significant
+
+res_ancom$zero_ind #No structural zeros
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+res_UC <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseUC, SE = res_ancom$res$se$DiseaseUC, p_val = res_ancom$res$p_val$DiseaseUC, q_val = res_ancom$res$q_val$DiseaseUC)
+
+write.table(res_CD,  paste0(path, "results/Single_genus_ANCOM_CD.txt"), col.names=T, row.names=F)
+write.table(res_UC,  paste0(path, "results/Single_genus_ANCOM_UC.txt"), col.names=T, row.names=F)
+```
+
+
+## Compare the three models
+```{r}
+#NBZI:
+res_CD <- read.csv(paste0(path, "results/Single_genus_NBZI_CD.txt"), sep=" ")
+res_CD_zi <- read.csv(paste0(path, "results/Single_genus_NBZI_CD_ZI.txt"), sep=" ")
+res_UC <- read.csv(paste0(path, "results/Single_genus_NBZI_UC.txt"), sep=" ")
+res_UC_zi <- read.csv(paste0(path, "results/Single_genus_NBZI_UC_ZI.txt"), sep=" ")
+
+res_total <- rbind(res_CD, res_CD_zi, res_UC, res_UC_zi)
+
+#Those that failed:
+res_CD$bug[which(is.na(res_CD$padj))]
+
+#ANCOM-BC:
+ANCOM_CD <- read.csv(paste0(path, "results/Single_genus_ANCOM_CD.txt"), sep=" ")
+ANCOM_UC <- read.csv(paste0(path, "results/Single_genus_ANCOM_UC.txt"), sep=" ")
+ANCOM_CD$part <- "Crohn's disease, ANCOM-BC"
+ANCOM_UC$part <- "Ulcerative colitis, ANCOM-BC"
+
+ANCOM <- rbind(ANCOM_CD, ANCOM_UC)
+
+res_total <- res_total %>% dplyr::select(bug, Estimate2, padj, part)
+ANCOM <- ANCOM %>% dplyr::select(bug, beta, q_val, part)
+colnames(ANCOM) <- colnames(res_total)
+
+res_total <- rbind(res_total, ANCOM)
+length(unique(res_total$bug))
+
+#MaAsLin2:
+maaslin <- read.csv(paste0(path, "results/Single_genus_MaAsLin2.txt"), sep=" ")
+maaslin$part <- ifelse(maaslin$value=="CD", "Crohn's disease, MaAsLin2", "Ulcerative colitis, MaAsLin2")
+maaslin <- maaslin %>% dplyr::select(feature, coef, qval, part)
+colnames(maaslin) <- colnames(res_total)
+
+res_total <- rbind(res_total,maaslin)
+res_total$bug2 <- gsub('[^\x30-\x7A]', ' ', res_total$bug)
+res_total$bug2 <- gsub('[\x5B]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5D]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5F]', ' ', res_total$bug2)
+res_total$bug2 <- gsub(' +',' ',res_total$bug2) 
+
+length(unique(res_total$bug2))
+
+#Plot
+sig2 <- res_total %>% filter(padj<0.05)
+bl <- colorRampPalette(c("navy","royalblue","lightskyblue"))(200)   
+re <- colorRampPalette(c("mistyrose", "red2","darkred"))(200)
+
+min(sig2$Estimate2)
+max(sig2$Estimate2)
+ggplot(data=sig2)+
+  geom_tile(aes(x=part, y=bug2, fill=Estimate2))+
+  scale_fill_gradientn(colours=c(bl, re), na.value = "black",limits = c(-5, 5))+
+  theme_classic()+xlab("")+ylab("")+
+  theme(axis.text.x = element_text(angle = 90))+ labs(fill="Estimate")
+
+#Investigate overlaps!!
+nbzi_na <- unique(res_total$bug[which(is.na(res_total$padj))])
+
+sig_CD <- c()
+sig_UC <- c()
+
+for (i in unique(res_total$bug2)){
+  df_CD <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+  df_UC <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+  if ((df_CD[1, "padj"]<0.05 | df_CD[2, "padj"]<0.05 | is.na(df_CD[2, "padj"])) & df_CD[3, "padj"]<0.05 & df_CD[4, "padj"]<0.05){
+    sig_CD <- c(sig_CD, i)
+  }
+  if ((df_UC[1, "padj"]<0.05 | df_UC[2, "padj"]<0.05| is.na(df_UC[2, "padj"])) & df_UC[3, "padj"]<0.05 & df_UC[4, "padj"]<0.05){
+    sig_UC <- c(sig_UC, i)
+  }
+  
+}
+
+res_CD <- res_total %>% filter(bug2 %in% sig_CD) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+res_CD$sign <- ifelse(res_CD$Estimate2 < 0, "-", "+")
+res_UC <- res_total %>% filter(bug2 %in% sig_UC)%>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+res_UC$sign <- ifelse(res_UC$Estimate2 < 0, "-", "+")
+
+#Remove those with different direction:
+sig_CD <- c()
+sig_UC <- c()
+for (i in unique(res_CD$bug2)){
+  df_sub <- res_CD %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+for (i in unique(res_UC$bug2)){
+  df_sub <- res_UC %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_UC <- c(sig_UC, i)
+  }
+}
+#77 and 64 for CD and UC
+res_CD <- res_CD %>% filter(bug2 %in% sig_CD)
+res_UC <- res_UC %>% filter(bug2 %in% sig_UC)
+
+sig_total <- rbind(res_CD, res_UC)
+length(unique(sig_total$bug2)) #94 in total
+sig_total <- sig_total %>% filter(!is.na(padj))
+sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
+sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
+
+ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+  geom_tile(aes(fill=padj))+
+  geom_text(aes(label=sign), color="white")+
+  scale_fill_gradient(low="blue", high="red")+
+  theme_classic()+xlab("")+ylab("")+
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+
+```
+
+Make NMDS showing the "chosen ones"
+```{r}
+library(vegan)
+ps_relab <- subset_samples(ps_relab_reduced, !is.na(Disease))
+ps_relab <- subset_samples(ps_relab, !is.na(geo_loc_name_country))
+ps_relab <- subset_samples(ps_relab, !is.na(host_sex))
+ps_relab <- subset_samples(ps_relab, !is.na(Host_Age))
+
+#CD:
+#Bray Curtis: 
+test <- res_CD %>% filter(part =="Crohn's disease, NB")
+
+ps_CD <- subset_samples(ps_relab, Disease !="UC")
+ps_CD <- subset_samples(ps_CD, Run != "ERR162916")
+my_subset <- as.data.frame(as.matrix(otu_table(ps_CD)))
+my_subset <- my_subset[, test$bug]
+
+ps_CD <- merge_phyloseq(otu_table(my_subset, taxa_are_rows =F), tax_table(ps_CD), sample_data(ps_CD))
+
+set.seed(0)
+BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_CD), k=2,trymax=30, distance="bray")
+BRAY_NMDS_relab$stress #0.2168137
+
+data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
+data_scores$Disease <- sample_data(ps_CD)$Disease
+data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "CD"))
+data_scores$Run <- row.names(data_scores)
+species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
+species_scores$species <- rownames(species_scores)
+species_scores$species <- gsub(".*_","",species_scores$species)
+
+ggplot(data_scores) +
+  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
+  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
+  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
+
+#Jaccard
+set.seed(0)
+BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_CD), k=2,trymax=30, distance="jaccard", binary=T)
+BRAY_NMDS_relab$stress #0.1822771
+
+data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
+data_scores$Disease <- sample_data(ps_CD)$Disease
+data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "CD"))
+data_scores$Run <- row.names(data_scores)
+species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
+species_scores$species <- rownames(species_scores)
+species_scores$species <- gsub(".*_","",species_scores$species)
+
+ggplot(data_scores) +
+  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
+  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
+  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
+
+#UC:
+#Bray Curtis: 
+test <- res_UC %>% filter(part =="Ulcerative colitis, NB")
+
+ps_UC <- subset_samples(ps_relab, Disease !="CD")
+my_subset <- as.data.frame(as.matrix(otu_table(ps_UC)))
+my_subset <- my_subset[, test$bug]
+
+ps_UC <- merge_phyloseq(otu_table(my_subset, taxa_are_rows =F), tax_table(ps_UC), sample_data(ps_UC))
+
+set.seed(0)
+BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_UC), k=2,trymax=30, distance="bray")
+BRAY_NMDS_relab$stress #0.2029482
+
+data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
+data_scores$Disease <- sample_data(ps_UC)$Disease
+data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "UC"))
+data_scores$Run <- row.names(data_scores)
+species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
+species_scores$species <- rownames(species_scores)
+species_scores$species <- gsub("Prevotella_","Prevotella.",species_scores$species)
+species_scores$species <- gsub(".*_","",species_scores$species)
+
+ggplot(data_scores) +
+  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
+  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
+  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
+
+#Jaccard
+set.seed(0)
+BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_UC), k=2,trymax=30, distance="jaccard", binary=T)
+BRAY_NMDS_relab$stress #0.1928975
+
+data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
+data_scores$Disease <- sample_data(ps_UC)$Disease
+data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "UC"))
+data_scores$Run <- row.names(data_scores)
+species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
+species_scores$species <- rownames(species_scores)
+species_scores$species <- gsub("Prevotella_","Prevotella.",species_scores$species)
+species_scores$species <- gsub(".*_","",species_scores$species)
+
+ggplot(data_scores) +
+  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
+  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
+  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
+```
+
+
+### Permutation: More similarities between CD and UC than if random?
+```{r}
+test_CD <- data.frame(bugs = unique(res_total$bug2))
+test_CD <- test_CD %>% mutate(sig = ifelse(bugs %in% sig_CD, "yes", "no")) 
+res_CD <- res_total %>% filter(part == "Crohn's disease, ANCOM-BC") %>% dplyr::select(bug2, Estimate2)
+test_CD <- merge(test_CD, res_CD , by.x="bugs", by.y="bug2")
+
+test_UC <- data.frame(bugs = unique(res_total$bug2))
+test_UC <- test_UC %>% mutate(sig = ifelse(bugs %in% sig_UC, "yes", "no")) 
+res_UC <- res_total %>% filter(part == "Ulcerative colitis, ANCOM-BC") %>% dplyr::select(bug2, Estimate2)
+test_UC <- merge(test_UC, res_UC , by.x="bugs", by.y="bug2")
+
+row.names(test_CD) <- test_CD$bugs
+row.names(test_UC) <- test_UC$bugs
+
+#How many in common?
+counter = 0
+sig <- c()
+  for (i in row.names(test_UC)) {
+      if ((sign(test_UC[i, "Estimate2"]) == sign(test_CD[i, "Estimate2"])) &
+          test_CD[i, "sig"] == "yes" &
+          test_UC[i, "sig"] == "yes") {
+        counter = counter + 1
+        sig <- c(sig, i)
+      }
+  }
+counter #46 overlaps
+sig
+
+perm_ucxcd <- rep(NA, 1000)
+for (j in 1:1000) {
+  set.seed(j)
+  row.names(test_UC) = row.names(test_UC)[sample(nrow(test_UC))]
+  counter = 0
+  for (i in row.names(test_UC)) {
+      if (sign(test_UC[i, "Estimate2"]) == sign(test_CD[i, "Estimate2"]) &
+          test_UC[i, "sig"] == "yes" &
+          test_CD[i, "sig"] == "yes") {
+        counter = counter + 1
+      }
+  }
+  perm_ucxcd[j] <- counter
+} 
+
+
+sum(perm_ucxcd>=46)/1000 #46 overlapping is significantly more than random! p-val = 0. 
+ggplot()+geom_histogram(aes(x=perm_ucxcd))+geom_vline(xintercept = 46)
+```
+
+
+
+## Sensitivity:
+Understand, what is making the difference!
+Test: Just reduce sample size, include smoking, include BMI, include both smoking and BMI.
+
+```{r}
+ps_reduced <- subset_samples(ps_count_reduced, !is.na(Disease))
+ps_reduced <- subset_samples(ps_reduced, !is.na(geo_loc_name_country))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_sex))
+ps_reduced <- subset_samples(ps_reduced, !is.na(Host_Age))  #2518 samples! 144 taxa
+ps_reduced <- subset_samples(ps_reduced, !is.na(smoking_status))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_body_mass_index))
+ps_reduced <- subset_samples(ps_reduced, host_body_mass_index>10)
+ps_reduced <- subset_samples(ps_reduced, host_body_mass_index<100) #1602 samples
+```
+
+
+### Sensitivity 1: Reduce sample size
+NBZI:
+```{r}
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$host_body_mass_index <- as.numeric(meta$host_body_mass_index)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent)
+meta$Disease <- factor(meta$Disease, levels = c("HC", "CD", "UC"))
+
+res_CD <- data.frame()
+res_UC <- data.frame()
+res_CD_zi <- data.frame()
+res_UC_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+Disease, offset = log(N), data=meta, dist="negbin")
+  f1 <- summary(f)
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC <- rbind(res_UC, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC_zi <- rbind(res_UC_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_UC$padj <- p.adjust(res_UC$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+res_UC_zi$padj <- p.adjust(res_UC_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_UC <- res_UC %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+sig_UC_zi <- res_UC_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_UC$bug, sig_CD_zi$bug, sig_UC_zi$bug))) #98 significant out of 144-11 = 133
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+res_CD_zi$Estimate2 <- -res_CD_zi$Estimate
+res_UC_zi$Estimate2 <- -res_UC_zi$Estimate
+res_CD$Estimate2 <- res_CD$Estimate
+res_UC$Estimate2 <- res_UC$Estimate
+res_CD$part <- "Crohn's disease, NB"
+res_CD_zi$part <- "Crohn's disease, ZI"
+res_UC$part <- "Ulcerative colitis, NB"
+res_UC_zi$part <- "Ulcerative colitis, ZI"
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_CD_sensitivity1.txt"), col.names=T, row.names=F)
+write.table(res_CD_zi, paste0(path, "results/Single_genus_CD_ZI_sensitivity1.txt"), col.names=T, row.names=F)
+write.table(res_UC, paste0(path, "results/Single_genus_UC_sensitivity1.txt"), col.names=T, row.names=F)
+write.table(res_UC_zi, paste0(path, "results/Single_genus_UC_ZI_sensitivity1.txt"), col.names=T, row.names=F)
+
+```
+
+ANCOM-BC:
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("HC", "CD", "UC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F, zero_cut=1)
+
+sum(res_ancom$res$q_val$DiseaseCD< 0.05) #67 significant
+sum(res_ancom$res$q_val$DiseaseUC< 0.05) #80 significant
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+res_UC <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseUC, SE = res_ancom$res$se$DiseaseUC, p_val = res_ancom$res$p_val$DiseaseUC, q_val = res_ancom$res$q_val$DiseaseUC)
+
+write.table(res_CD,  paste0(path, "results/ANCOM_CD_sensitivity1.txt"), col.names=T, row.names=F)
+write.table(res_UC,  paste0(path, "results/ANCOM_UC_sensitivity1.txt"), col.names=T, row.names=F)
+
+```
+
+MaAsLin2:
+```{r}
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$host_body_mass_index <- as.numeric(input_metadata$host_body_mass_index)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("HC", "CD", "UC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output_sensitivity1", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex"), reference = "Disease,HC", plot_heatmap = F, plot_scatter = F,
+    min_prevalence = 0)
+
+res <- read.csv("MaAsLin2_output_sensitivity1/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+sum(res$qval<0.05) #75 significant
+
+write.table(res, paste0(path, "results/MaAsLin2_sensitivity1.txt"), col.names=T, row.names=F)
+```
+
+Compare:
+```{r}
+#NBZI:
+res_CD <- read.csv(paste0(path, "results/Single_genus_CD_sensitivity1.txt"), sep=" ")
+res_CD_zi <- read.csv(paste0(path, "results/Single_genus_CD_ZI_sensitivity1.txt"), sep=" ")
+res_UC <- read.csv(paste0(path, "results/Single_genus_UC_sensitivity1.txt"), sep=" ")
+res_UC_zi <- read.csv(paste0(path, "results/Single_genus_UC_ZI_sensitivity1.txt"), sep=" ")
+
+res_total <- rbind(res_CD, res_CD_zi, res_UC, res_UC_zi)
+
+#Those that failed:
+res_CD$bug[which(is.na(res_CD$padj))]
+
+#ANCOM-BC:
+ANCOM_CD <- read.csv(paste0(path, "results/ANCOM_CD_sensitivity1.txt"), sep=" ")
+ANCOM_UC <- read.csv(paste0(path, "results/ANCOM_UC_sensitivity1.txt"), sep=" ")
+ANCOM_CD$part <- "Crohn's disease, ANCOM-BC"
+ANCOM_UC$part <- "Ulcerative colitis, ANCOM-BC"
+
+ANCOM <- rbind(ANCOM_CD, ANCOM_UC)
+
+res_total <- res_total %>% dplyr::select(bug, Estimate2, padj, part)
+ANCOM <- ANCOM %>% dplyr::select(bug, beta, q_val, part)
+colnames(ANCOM) <- colnames(res_total)
+
+res_total <- rbind(res_total, ANCOM)
+length(unique(res_total$bug))
+
+#MaAsLin2:
+maaslin <- read.csv(paste0(path, "results/MaAsLin2_sensitivity1.txt"), sep=" ")
+maaslin$part <- ifelse(maaslin$value=="CD", "Crohn's disease, MaAsLin2", "Ulcerative colitis, MaAsLin2")
+maaslin <- maaslin %>% dplyr::select(feature, coef, qval, part)
+colnames(maaslin) <- colnames(res_total)
+
+res_total <- rbind(res_total,maaslin)
+res_total$bug2 <- gsub('[^\x30-\x7A]', ' ', res_total$bug)
+res_total$bug2 <- gsub('[\x5B]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5D]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5F]', ' ', res_total$bug2)
+res_total$bug2 <- gsub(' +',' ',res_total$bug2) 
+
+length(unique(res_total$bug2))
+
+#Plot
+sig2 <- res_total %>% filter(padj<0.05)
+bl <- colorRampPalette(c("navy","royalblue","lightskyblue"))(200)   
+re <- colorRampPalette(c("mistyrose", "red2","darkred"))(200)
+
+min(sig2$Estimate2)
+max(sig2$Estimate2)
+ggplot(data=sig2)+
+  geom_tile(aes(x=part, y=bug2, fill=Estimate2))+
+  scale_fill_gradientn(colours=c(bl, re), na.value = "black",limits = c(-3.5, 3.5))+
+  theme_classic()+xlab("")+ylab("")+
+  theme(axis.text.x = element_text(angle = 90))+ labs(fill="Estimate")
+
+#Investigate overlaps!!
+nbzi_na <- unique(res_total$bug[which(is.na(res_total$padj))])
+
+sig_CD <- c()
+sig_UC <- c()
+
+for (i in unique(res_total$bug2)){
+  df_CD <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+  df_UC <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+  if ((df_CD[1, "padj"]<0.05 | df_CD[2, "padj"]<0.05 | is.na(df_CD[2, "padj"])) & df_CD[3, "padj"]<0.05 & df_CD[4, "padj"]<0.05){
+    sig_CD <- c(sig_CD, i)
+  }
+  if ((df_UC[1, "padj"]<0.05 | df_UC[2, "padj"]<0.05| is.na(df_UC[2, "padj"])) & df_UC[3, "padj"]<0.05 & df_UC[4, "padj"]<0.05){
+    sig_UC <- c(sig_UC, i)
+  }
+  
+}
+
+res_CD <- res_total %>% filter(bug2 %in% sig_CD) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+res_CD$sign <- ifelse(res_CD$Estimate2 < 0, "-", "+")
+res_UC <- res_total %>% filter(bug2 %in% sig_UC)%>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+res_UC$sign <- ifelse(res_UC$Estimate2 < 0, "-", "+")
+
+#Remove those with different direction:
+sig_CD <- c()
+sig_UC <- c()
+for (i in unique(res_CD$bug2)){
+  df_sub <- res_CD %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+for (i in unique(res_UC$bug2)){
+  df_sub <- res_UC %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_UC <- c(sig_UC, i)
+  }
+}
+#24 and 33 for CD and UC
+res_CD <- res_CD %>% filter(bug2 %in% sig_CD)
+res_UC <- res_UC %>% filter(bug2 %in% sig_UC)
+
+sig_total <- rbind(res_CD, res_UC)
+length(unique(sig_total$bug2)) #41
+sig_total <- sig_total %>% filter(!is.na(padj))
+sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
+sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
+
+ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+  geom_tile(aes(fill=padj))+
+  geom_text(aes(label=sign), color="white")+
+  scale_fill_gradient(low="blue", high="red")+
+  theme_classic()+xlab("")+ylab("")+
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+```
+
+### Sensitivity 2: Include BMI 
+NBZI:
+```{r}
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$host_body_mass_index <- as.numeric(meta$host_body_mass_index)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent)
+meta$Disease <- factor(meta$Disease, levels = c("HC", "CD", "UC"))
+
+res_CD <- data.frame()
+res_UC <- data.frame()
+res_CD_zi <- data.frame()
+res_UC_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+host_body_mass_index+Disease, offset = log(N), data=meta, dist="negbin")
+  f1 <- summary(f)
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC <- rbind(res_UC, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC_zi <- rbind(res_UC_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_UC$padj <- p.adjust(res_UC$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+res_UC_zi$padj <- p.adjust(res_UC_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_UC <- res_UC %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+sig_UC_zi <- res_UC_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_UC$bug, sig_CD_zi$bug, sig_UC_zi$bug))) #98 significant out of 144-11 = 133
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+res_CD_zi$Estimate2 <- -res_CD_zi$Estimate
+res_UC_zi$Estimate2 <- -res_UC_zi$Estimate
+res_CD$Estimate2 <- res_CD$Estimate
+res_UC$Estimate2 <- res_UC$Estimate
+res_CD$part <- "Crohn's disease, NB"
+res_CD_zi$part <- "Crohn's disease, ZI"
+res_UC$part <- "Ulcerative colitis, NB"
+res_UC_zi$part <- "Ulcerative colitis, ZI"
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_CD_sensitivity2.txt"), col.names=T, row.names=F)
+write.table(res_CD_zi, paste0(path, "results/Single_genus_CD_ZI_sensitivity2.txt"), col.names=T, row.names=F)
+write.table(res_UC, paste0(path, "results/Single_genus_UC_sensitivity2.txt"), col.names=T, row.names=F)
+write.table(res_UC_zi, paste0(path, "results/Single_genus_UC_ZI_sensitivity2.txt"), col.names=T, row.names=F)
+
+```
+
+ANCOM-BC:
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("HC", "CD", "UC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+host_body_mass_index+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F, zero_cut=1)
+
+sum(res_ancom$res$q_val$DiseaseCD< 0.05) #69 significant
+sum(res_ancom$res$q_val$DiseaseUC< 0.05) #80 significant
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+res_UC <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseUC, SE = res_ancom$res$se$DiseaseUC, p_val = res_ancom$res$p_val$DiseaseUC, q_val = res_ancom$res$q_val$DiseaseUC)
+
+write.table(res_CD,  paste0(path, "results/ANCOM_CD_sensitivity2.txt"), col.names=T, row.names=F)
+write.table(res_UC,  paste0(path, "results/ANCOM_UC_sensitivity2.txt"), col.names=T, row.names=F)
+
+```
+
+MaAsLin2:
+```{r}
+#samples as rows, factorize!
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$host_body_mass_index <- as.numeric(input_metadata$host_body_mass_index)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("HC", "CD", "UC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output_sensitivity2", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex", "host_body_mass_index"), reference = "Disease,HC", plot_heatmap = F, plot_scatter = F,
+    min_prevalence = 0)
+
+res <- read.csv("MaAsLin2_output_sensitivity2/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+
+write.table(res, paste0(path, "results/MaAsLin2_sensitivity2.txt"), col.names=T, row.names=F)
+```
+
+Compare:
+```{r}
+#NBZI:
+res_CD <- read.csv(paste0(path, "results/Single_genus_CD_sensitivity2.txt"), sep=" ")
+res_CD_zi <- read.csv(paste0(path, "results/Single_genus_CD_ZI_sensitivity2.txt"), sep=" ")
+res_UC <- read.csv(paste0(path, "results/Single_genus_UC_sensitivity2.txt"), sep=" ")
+res_UC_zi <- read.csv(paste0(path, "results/Single_genus_UC_ZI_sensitivity2.txt"), sep=" ")
+
+res_total <- rbind(res_CD, res_CD_zi, res_UC, res_UC_zi)
+
+#Those that failed:
+res_CD$bug[which(is.na(res_CD$padj))]
+
+#ANCOM-BC:
+ANCOM_CD <- read.csv(paste0(path, "results/ANCOM_CD_sensitivity2.txt"), sep=" ")
+ANCOM_UC <- read.csv(paste0(path, "results/ANCOM_UC_sensitivity2.txt"), sep=" ")
+ANCOM_CD$part <- "Crohn's disease, ANCOM-BC"
+ANCOM_UC$part <- "Ulcerative colitis, ANCOM-BC"
+
+ANCOM <- rbind(ANCOM_CD, ANCOM_UC)
+
+res_total <- res_total %>% dplyr::select(bug, Estimate2, padj, part)
+ANCOM <- ANCOM %>% dplyr::select(bug, beta, q_val, part)
+colnames(ANCOM) <- colnames(res_total)
+
+res_total <- rbind(res_total, ANCOM)
+length(unique(res_total$bug))
+
+#MaAsLin2:
+maaslin <- read.csv(paste0(path, "results/MaAsLin2_sensitivity2.txt"), sep=" ")
+maaslin$part <- ifelse(maaslin$value=="CD", "Crohn's disease, MaAsLin2", "Ulcerative colitis, MaAsLin2")
+maaslin <- maaslin %>% dplyr::select(feature, coef, qval, part)
+colnames(maaslin) <- colnames(res_total)
+
+res_total <- rbind(res_total,maaslin)
+res_total$bug2 <- gsub('[^\x30-\x7A]', ' ', res_total$bug)
+res_total$bug2 <- gsub('[\x5B]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5D]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5F]', ' ', res_total$bug2)
+res_total$bug2 <- gsub(' +',' ',res_total$bug2) 
+
+length(unique(res_total$bug2))
+
+#Investigate overlaps!!
+nbzi_na <- unique(res_total$bug[which(is.na(res_total$padj))])
+
+sig_CD <- c()
+sig_UC <- c()
+
+for (i in unique(res_total$bug2)){
+  df_CD <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+  df_UC <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+  if ((df_CD[1, "padj"]<0.05 | df_CD[2, "padj"]<0.05 | is.na(df_CD[2, "padj"])) & df_CD[3, "padj"]<0.05 & df_CD[4, "padj"]<0.05){
+    sig_CD <- c(sig_CD, i)
+  }
+  if ((df_UC[1, "padj"]<0.05 | df_UC[2, "padj"]<0.05| is.na(df_UC[2, "padj"])) & df_UC[3, "padj"]<0.05 & df_UC[4, "padj"]<0.05){
+    sig_UC <- c(sig_UC, i)
+  }
+  
+}
+
+res_CD <- res_total %>% filter(bug2 %in% sig_CD) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+res_CD$sign <- ifelse(res_CD$Estimate2 < 0, "-", "+")
+res_UC <- res_total %>% filter(bug2 %in% sig_UC)%>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+res_UC$sign <- ifelse(res_UC$Estimate2 < 0, "-", "+")
+
+#Remove those with different direction:
+sig_CD <- c()
+sig_UC <- c()
+for (i in unique(res_CD$bug2)){
+  df_sub <- res_CD %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+for (i in unique(res_UC$bug2)){
+  df_sub <- res_UC %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_UC <- c(sig_UC, i)
+  }
+}
+#21 and 31 for CD and UC
+res_CD <- res_CD %>% filter(bug2 %in% sig_CD)
+res_UC <- res_UC %>% filter(bug2 %in% sig_UC)
+
+sig_total <- rbind(res_CD, res_UC)
+length(unique(sig_total$bug2))
+sig_total <- sig_total %>% filter(!is.na(padj))
+sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
+sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
+
+ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+  geom_tile(aes(fill=padj))+
+  geom_text(aes(label=sign), color="white")+
+  scale_fill_gradient(low="blue", high="red")+
+  theme_classic()+xlab("")+ylab("")+
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+```
+
+### Sensitivity 3: Include smoking
+NBZI:
+```{r}
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$host_body_mass_index <- as.numeric(meta$host_body_mass_index)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent, "_", meta$smoking_status)
+meta$Disease <- factor(meta$Disease, levels = c("HC", "CD", "UC"))
+
+res_CD <- data.frame()
+res_UC <- data.frame()
+res_CD_zi <- data.frame()
+res_UC_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+Disease, offset = log(N), data=meta, dist="negbin")
+  f1 <- summary(f)
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC <- rbind(res_UC, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC_zi <- rbind(res_UC_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_UC$padj <- p.adjust(res_UC$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+res_UC_zi$padj <- p.adjust(res_UC_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_UC <- res_UC %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+sig_UC_zi <- res_UC_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_UC$bug, sig_CD_zi$bug, sig_UC_zi$bug))) #90 significant out of 144-13 = 131
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+res_CD_zi$Estimate2 <- -res_CD_zi$Estimate
+res_UC_zi$Estimate2 <- -res_UC_zi$Estimate
+res_CD$Estimate2 <- res_CD$Estimate
+res_UC$Estimate2 <- res_UC$Estimate
+res_CD$part <- "Crohn's disease, NB"
+res_CD_zi$part <- "Crohn's disease, ZI"
+res_UC$part <- "Ulcerative colitis, NB"
+res_UC_zi$part <- "Ulcerative colitis, ZI"
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_CD_sensitivity3.txt"), col.names=T, row.names=F)
+write.table(res_CD_zi, paste0(path, "results/Single_genus_CD_ZI_sensitivity3.txt"), col.names=T, row.names=F)
+write.table(res_UC, paste0(path, "results/Single_genus_UC_sensitivity3.txt"), col.names=T, row.names=F)
+write.table(res_UC_zi, paste0(path, "results/Single_genus_UC_ZI_sensitivity3.txt"), col.names=T, row.names=F)
+
+```
+
+ANCOM-BC:
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent, "_", sample_data(ps_reduced)$smoking_status)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("HC", "CD", "UC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F, zero_cut=1)
+
+sum(res_ancom$res$q_val$DiseaseCD< 0.05) #65 significant
+sum(res_ancom$res$q_val$DiseaseUC< 0.05) #79 significant
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+res_UC <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseUC, SE = res_ancom$res$se$DiseaseUC, p_val = res_ancom$res$p_val$DiseaseUC, q_val = res_ancom$res$q_val$DiseaseUC)
+
+write.table(res_CD,  paste0(path, "results/ANCOM_CD_sensitivity3.txt"), col.names=T, row.names=F)
+write.table(res_UC,  paste0(path, "results/ANCOM_UC_sensitivity3.txt"), col.names=T, row.names=F)
+```
+
+MaAsLin2:
+```{r}
+#samples as rows, factorize!
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$host_body_mass_index <- as.numeric(input_metadata$host_body_mass_index)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent, "_", input_metadata$smoking_status)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("HC", "CD", "UC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output_sensitivity3", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex"), reference = "Disease,HC", plot_heatmap = F, plot_scatter = F,
+    min_prevalence = 0)
+
+res <- read.csv("MaAsLin2_output_sensitivity3/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+
+write.table(res, paste0(path, "results/MaAsLin2_sensitivity3.txt"), col.names=T, row.names=F)
+```
+
+Compare:
+```{r}
+#NBZI:
+res_CD <- read.csv(paste0(path, "results/Single_genus_CD_sensitivity3.txt"), sep=" ")
+res_CD_zi <- read.csv(paste0(path, "results/Single_genus_CD_ZI_sensitivity3.txt"), sep=" ")
+res_UC <- read.csv(paste0(path, "results/Single_genus_UC_sensitivity3.txt"), sep=" ")
+res_UC_zi <- read.csv(paste0(path, "results/Single_genus_UC_ZI_sensitivity3.txt"), sep=" ")
+
+res_total <- rbind(res_CD, res_CD_zi, res_UC, res_UC_zi)
+
+#Those that failed:
+res_CD$bug[which(is.na(res_CD$padj))]
+
+#ANCOM-BC:
+ANCOM_CD <- read.csv(paste0(path, "results/ANCOM_CD_sensitivity3.txt"), sep=" ")
+ANCOM_UC <- read.csv(paste0(path, "results/ANCOM_UC_sensitivity3.txt"), sep=" ")
+ANCOM_CD$part <- "Crohn's disease, ANCOM-BC"
+ANCOM_UC$part <- "Ulcerative colitis, ANCOM-BC"
+
+ANCOM <- rbind(ANCOM_CD, ANCOM_UC)
+
+res_total <- res_total %>% dplyr::select(bug, Estimate2, padj, part)
+ANCOM <- ANCOM %>% dplyr::select(bug, beta, q_val, part)
+colnames(ANCOM) <- colnames(res_total)
+
+res_total <- rbind(res_total, ANCOM)
+length(unique(res_total$bug))
+
+#MaAsLin2:
+maaslin <- read.csv(paste0(path, "results/MaAsLin2_sensitivity3.txt"), sep=" ")
+maaslin$part <- ifelse(maaslin$value=="CD", "Crohn's disease, MaAsLin2", "Ulcerative colitis, MaAsLin2")
+maaslin <- maaslin %>% dplyr::select(feature, coef, qval, part)
+colnames(maaslin) <- colnames(res_total)
+
+res_total <- rbind(res_total,maaslin)
+res_total$bug2 <- gsub('[^\x30-\x7A]', ' ', res_total$bug)
+res_total$bug2 <- gsub('[\x5B]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5D]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5F]', ' ', res_total$bug2)
+res_total$bug2 <- gsub(' +',' ',res_total$bug2) 
+
+length(unique(res_total$bug2))
+
+#Investigate overlaps!!
+sig_CD <- c()
+sig_UC <- c()
+
+for (i in unique(res_total$bug2)){
+  df_CD <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+  df_UC <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+  if ((df_CD[1, "padj"]<0.05 | df_CD[2, "padj"]<0.05 | is.na(df_CD[2, "padj"])) & df_CD[3, "padj"]<0.05 & df_CD[4, "padj"]<0.05){
+    sig_CD <- c(sig_CD, i)
+  }
+  if ((df_UC[1, "padj"]<0.05 | df_UC[2, "padj"]<0.05| is.na(df_UC[2, "padj"])) & df_UC[3, "padj"]<0.05 & df_UC[4, "padj"]<0.05){
+    sig_UC <- c(sig_UC, i)
+  }
+  
+}
+
+res_CD <- res_total %>% filter(bug2 %in% sig_CD) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+res_CD$sign <- ifelse(res_CD$Estimate2 < 0, "-", "+")
+res_UC <- res_total %>% filter(bug2 %in% sig_UC)%>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+res_UC$sign <- ifelse(res_UC$Estimate2 < 0, "-", "+")
+
+#Remove those with different direction:
+sig_CD <- c()
+sig_UC <- c()
+for (i in unique(res_CD$bug2)){
+  df_sub <- res_CD %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+for (i in unique(res_UC$bug2)){
+  df_sub <- res_UC %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_UC <- c(sig_UC, i)
+  }
+}
+#22 and 30 for CD and UC
+res_CD <- res_CD %>% filter(bug2 %in% sig_CD)
+res_UC <- res_UC %>% filter(bug2 %in% sig_UC)
+
+sig_total <- rbind(res_CD, res_UC)
+length(unique(sig_total$bug2)) #38
+sig_total <- sig_total %>% filter(!is.na(padj))
+sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
+sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
+
+ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+  geom_tile(aes(fill=padj))+
+  geom_text(aes(label=sign), color="white")+
+  scale_fill_gradient(low="blue", high="red")+
+  theme_classic()+xlab("")+ylab("")+
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+```
+
+
+### Sensitivity 4: Adjust for smoking and BMI
+NBZI:
+```{r}
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$host_body_mass_index <- as.numeric(meta$host_body_mass_index)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent, "_", meta$smoking_status)
+meta$Disease <- factor(meta$Disease, levels = c("HC", "CD", "UC"))
+
+res_CD <- data.frame()
+res_UC <- data.frame()
+res_CD_zi <- data.frame()
+res_UC_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+host_body_mass_index+Disease, offset = log(N), data=meta, dist="negbin")
+  f1 <- summary(f)
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC <- rbind(res_UC, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  f3 <- as.data.frame(t(f2["DiseaseUC", ]))
+  f3$bug <- i
+  res_UC_zi <- rbind(res_UC_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_UC$padj <- p.adjust(res_UC$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+res_UC_zi$padj <- p.adjust(res_UC_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_UC <- res_UC %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+sig_UC_zi <- res_UC_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_UC$bug, sig_CD_zi$bug, sig_UC_zi$bug))) #92 significant out of 144-12 = 132
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+res_CD_zi$Estimate2 <- -res_CD_zi$Estimate
+res_UC_zi$Estimate2 <- -res_UC_zi$Estimate
+res_CD$Estimate2 <- res_CD$Estimate
+res_UC$Estimate2 <- res_UC$Estimate
+res_CD$part <- "Crohn's disease, NB"
+res_CD_zi$part <- "Crohn's disease, ZI"
+res_UC$part <- "Ulcerative colitis, NB"
+res_UC_zi$part <- "Ulcerative colitis, ZI"
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_CD_sensitivity4.txt"), col.names=T, row.names=F)
+write.table(res_CD_zi, paste0(path, "results/Single_genus_CD_ZI_sensitivity4.txt"), col.names=T, row.names=F)
+write.table(res_UC, paste0(path, "results/Single_genus_UC_sensitivity4.txt"), col.names=T, row.names=F)
+write.table(res_UC_zi, paste0(path, "results/Single_genus_UC_ZI_sensitivity4.txt"), col.names=T, row.names=F)
+
+```
+
+ANCOM-BC:
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent, "_", sample_data(ps_reduced)$smoking_status)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("HC", "CD", "UC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+host_body_mass_index+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F, zero_cut=1)
+
+sum(res_ancom$res$q_val$DiseaseCD< 0.05) #71 significant
+sum(res_ancom$res$q_val$DiseaseUC< 0.05) #76 significant
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+res_UC <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseUC, SE = res_ancom$res$se$DiseaseUC, p_val = res_ancom$res$p_val$DiseaseUC, q_val = res_ancom$res$q_val$DiseaseUC)
+
+write.table(res_CD,  paste0(path, "results/ANCOM_CD_sensitivity4.txt"), col.names=T, row.names=F)
+write.table(res_UC,  paste0(path, "results/ANCOM_UC_sensitivity4.txt"), col.names=T, row.names=F)
+
+```
+
+MaAsLin2:
+```{r}
+#samples as rows, factorize!
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$host_body_mass_index <- as.numeric(input_metadata$host_body_mass_index)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent, "_", input_metadata$smoking_status)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("HC", "CD", "UC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output_sensitivity4", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex", "host_body_mass_index"), reference = "Disease,HC", plot_heatmap = F, plot_scatter = F,
+    min_prevalence = 0)
+
+res <- read.csv("MaAsLin2_output_sensitivity4/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+
+write.table(res, paste0(path, "results/MaAsLin2_sensitivity4.txt"), col.names=T, row.names=F)
+```
+
+Compare:
+```{r}
+#NBZI:
+res_CD <- read.csv(paste0(path, "results/Single_genus_CD_sensitivity4.txt"), sep=" ")
+res_CD_zi <- read.csv(paste0(path, "results/Single_genus_CD_ZI_sensitivity4.txt"), sep=" ")
+res_UC <- read.csv(paste0(path, "results/Single_genus_UC_sensitivity4.txt"), sep=" ")
+res_UC_zi <- read.csv(paste0(path, "results/Single_genus_UC_ZI_sensitivity4.txt"), sep=" ")
+
+res_total <- rbind(res_CD, res_CD_zi, res_UC, res_UC_zi)
+
+#Those that failed:
+res_CD$bug[which(is.na(res_CD$padj))]
+
+#ANCOM-BC:
+ANCOM_CD <- read.csv(paste0(path, "results/ANCOM_CD_sensitivity4.txt"), sep=" ")
+ANCOM_UC <- read.csv(paste0(path, "results/ANCOM_UC_sensitivity4.txt"), sep=" ")
+ANCOM_CD$part <- "Crohn's disease, ANCOM-BC"
+ANCOM_UC$part <- "Ulcerative colitis, ANCOM-BC"
+
+ANCOM <- rbind(ANCOM_CD, ANCOM_UC)
+
+res_total <- res_total %>% dplyr::select(bug, Estimate2, padj, part)
+ANCOM <- ANCOM %>% dplyr::select(bug, beta, q_val, part)
+colnames(ANCOM) <- colnames(res_total)
+
+res_total <- rbind(res_total, ANCOM)
+length(unique(res_total$bug))
+
+#MaAsLin2:
+maaslin <- read.csv(paste0(path, "results/MaAsLin2_sensitivity4.txt"), sep=" ")
+maaslin$part <- ifelse(maaslin$value=="CD", "Crohn's disease, MaAsLin2", "Ulcerative colitis, MaAsLin2")
+maaslin <- maaslin %>% dplyr::select(feature, coef, qval, part)
+colnames(maaslin) <- colnames(res_total)
+
+res_total <- rbind(res_total,maaslin)
+res_total$bug2 <- gsub('[^\x30-\x7A]', ' ', res_total$bug)
+res_total$bug2 <- gsub('[\x5B]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5D]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5F]', ' ', res_total$bug2)
+res_total$bug2 <- gsub(' +',' ',res_total$bug2) 
+
+length(unique(res_total$bug2))
+
+#Investigate overlaps!!
+nbzi_na <- unique(res_total$bug[which(is.na(res_total$padj))])
+
+sig_CD <- c()
+sig_UC <- c()
+
+for (i in unique(res_total$bug2)){
+  df_CD <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+  df_UC <- res_total %>% filter(bug2 == i) %>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+  if ((df_CD[1, "padj"]<0.05 | df_CD[2, "padj"]<0.05 | is.na(df_CD[2, "padj"])) & df_CD[3, "padj"]<0.05 & df_CD[4, "padj"]<0.05){
+    sig_CD <- c(sig_CD, i)
+  }
+  if ((df_UC[1, "padj"]<0.05 | df_UC[2, "padj"]<0.05| is.na(df_UC[2, "padj"])) & df_UC[3, "padj"]<0.05 & df_UC[4, "padj"]<0.05){
+    sig_UC <- c(sig_UC, i)
+  }
+  
+}
+
+res_CD <- res_total %>% filter(bug2 %in% sig_CD) %>% filter(part %in% c("Crohn's disease, NB", "Crohn's disease, ZI", "Crohn's disease, ANCOM-BC", "Crohn's disease, MaAsLin2"))
+res_CD$sign <- ifelse(res_CD$Estimate2 < 0, "-", "+")
+res_UC <- res_total %>% filter(bug2 %in% sig_UC)%>% filter(part %in% c("Ulcerative colitis, NB", "Ulcerative colitis, ZI", "Ulcerative colitis, ANCOM-BC", "Ulcerative colitis, MaAsLin2"))
+res_UC$sign <- ifelse(res_UC$Estimate2 < 0, "-", "+")
+
+#Remove those with different direction:
+sig_CD <- c()
+sig_UC <- c()
+for (i in unique(res_CD$bug2)){
+  df_sub <- res_CD %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+for (i in unique(res_UC$bug2)){
+  df_sub <- res_UC %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_UC <- c(sig_UC, i)
+  }
+}
+#22 and 32 for CD and UC
+res_CD <- res_CD %>% filter(bug2 %in% sig_CD)
+res_UC <- res_UC %>% filter(bug2 %in% sig_UC)
+
+sig_total <- rbind(res_CD, res_UC)
+length(unique(sig_total$bug2))
+sig_total <- sig_total %>% filter(!is.na(padj))
+sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
+sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
+
+ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+  geom_tile(aes(fill=padj))+
+  geom_text(aes(label=sign), color="white")+
+  scale_fill_gradient(low="blue", high="red")+
+  theme_classic()+xlab("")+ylab("")+
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+```
+
+
+## Compare CD to UC:
+### NBZI
+```{r}
+ps_reduced <- subset_samples(ps_count_reduced, !is.na(Disease))
+ps_reduced <- subset_samples(ps_reduced, !is.na(geo_loc_name_country))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_sex))
+ps_reduced <- subset_samples(ps_reduced, !is.na(Host_Age))  #2518 samples! 144 taxa
+
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent)
+meta$Disease <- factor(meta$Disease, levels = c("UC", "CD", "HC"))
+
+res_CD <- data.frame()
+res_CD_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+Disease, offset = log(N), data=meta, dist="negbin")
+  f1 <- summary(f)
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_CD_zi$bug))) #68 significant out of 144-11 = 133
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+#Color based on Phylum:
+tax_tab <- as.data.frame(tax_table(ps_reduced))
+tax_tab$bugs <- row.names(tax_tab)
+res_CD <- merge(res_CD, tax_tab, by.x="bug", by.y ="bugs")
+res_CD_ZI <- merge(res_CD_zi, tax_tab, by.x="bug", by.y ="bugs")
+
+res_CD_ZI$Estimate2 <- -res_CD_ZI$Estimate
+res_CD$Estimate2 <- res_CD$Estimate
+
+res_CD$part <- "NB"
+res_CD_ZI$part <- "ZI"
+
+res_combined <- rbind(res_CD, res_CD_ZI)
+res_combined <- res_combined %>% filter(!is.na(padj))
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_CD_vs_UC.txt"), col.names=T, row.names=F)
+write.table(res_CD_ZI, paste0(path, "results/Single_genus_CD_vs_UC_ZI.txt"), col.names=T, row.names=F)
+```
+
+### ANCOM-BC:
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("UC", "CD", "HC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F, zero_cut=1)
+
+sum(res_ancom$res$q_val$DiseaseCD< 0.05) #57 significant
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+write.table(res_CD,  paste0(path, "results/ANCOM_CD_vs_UC.txt"), col.names=T, row.names=F)
+```
+
+### MaAsLin2:
+```{r}
+#samples as rows, factorize!
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("UC", "CD", "HC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output_UC_vs_CD", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex"), reference = "Disease,UC", 
+    plot_heatmap = F,
+    plot_scatter = F)
+
+res <- read.csv("MaAsLin2_output_UC_vs_CD/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+res <- res %>% filter(value == "CD")
+
+write.table(res, paste0(path, "results/Single_genus_CD_vs_UC_MaAsLin2.txt"), col.names=T, row.names=F)
+
+```
+
+
+## Compare:
+```{r}
+#NBZI:
+res_CD <- read.csv(paste0(path, "results/Single_genus_CD_vs_UC.txt"), sep=" ")
+res_CD_zi <- read.csv(paste0(path, "results/Single_genus_CD_vs_UC_ZI.txt"), sep=" ")
+
+res_total <- rbind(res_CD, res_CD_zi)
+
+#Those that failed:
+res_CD$bug[which(is.na(res_CD$padj))]
+
+#ANCOM-BC:
+ANCOM_CD <- read.csv(paste0(path, "results/ANCOM_CD_vs_UC.txt"), sep=" ")
+ANCOM_CD$part <- "ANCOM-BC"
+
+res_total <- res_total %>% dplyr::select(bug, Estimate2, padj, part)
+ANCOM_CD <- ANCOM_CD %>% dplyr::select(bug, beta, q_val, part)
+colnames(ANCOM_CD) <- colnames(res_total)
+
+res_total <- rbind(res_total, ANCOM_CD)
+length(unique(res_total$bug))
+
+#MaAsLin2:
+maaslin <- read.csv(paste0(path, "results/Single_genus_CD_vs_UC_MaAsLin2.txt"), sep=" ")
+maaslin$part <- "MaAsLin2"
+maaslin <- maaslin %>% dplyr::select(feature, coef, qval, part)
+colnames(maaslin) <- colnames(res_total)
+
+res_total <- rbind(res_total,maaslin)
+res_total$bug2 <- gsub('[^\x30-\x7A]', ' ', res_total$bug)
+res_total$bug2 <- gsub('[\x5B]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5D]', ' ', res_total$bug2)
+res_total$bug2 <- gsub('[\x5F]', ' ', res_total$bug2)
+res_total$bug2 <- gsub(' +',' ',res_total$bug2) 
+
+length(unique(res_total$bug2))
+
+#Investigate overlaps!!
+nbzi_na <- unique(res_total$bug[which(is.na(res_total$padj))])
+
+sig_CD <- c()
+
+for (i in unique(res_total$bug2)){
+  df_CD <- res_total %>% filter(bug2 == i)
+  if ((df_CD[1, "padj"]<0.05 | df_CD[2, "padj"]<0.05 | is.na(df_CD[2, "padj"])) & df_CD[3, "padj"]<0.05 & df_CD[4, "padj"]<0.05){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+
+res_CD <- res_total %>% filter(bug2 %in% sig_CD)
+res_CD$sign <- ifelse(res_CD$Estimate2 < 0, "-", "+")
+
+#Remove those with different direction:
+sig_CD <- c()
+for (i in unique(res_CD$bug2)){
+  df_sub <- res_CD %>% filter(bug2==i)
+  if (df_sub[3, "sign"] == df_sub[4, "sign"] & (df_sub[3, "sign"] ==df_sub[1, "sign"] | df_sub[3, "sign"] ==df_sub[2, "sign"] | is.na(df_sub[2, "padj"]))){
+    sig_CD <- c(sig_CD, i)
+  }
+}
+
+res_CD <- res_CD %>% filter(bug2 %in% sig_CD)
+
+sig_total <- res_CD
+length(unique(sig_total$bug2))
+sig_total <- sig_total %>% filter(!is.na(padj))
+sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
+sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
+
+ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+  geom_tile(aes(fill=padj))+
+  geom_text(aes(label=sign), color="white")+
+  scale_fill_gradient(low="blue", high="red")+
+  theme_classic()+xlab("")+ylab("")+
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+
+```
+
+## Sensitivity:
+NBZI
+```{r}
+ps_reduced <- subset_samples(ps_count_reduced, !is.na(Disease))
+ps_reduced <- subset_samples(ps_reduced, !is.na(geo_loc_name_country))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_sex))
+ps_reduced <- subset_samples(ps_reduced, !is.na(Host_Age))  #2518 samples! 144 taxa
+ps_reduced <- subset_samples(ps_reduced, !is.na(smoking_status))
+ps_reduced <- subset_samples(ps_reduced, !is.na(host_body_mass_index))
+ps_reduced <- subset_samples(ps_reduced, host_body_mass_index>10)
+ps_reduced <- subset_samples(ps_reduced, host_body_mass_index<100) #1602 samples
+
+genera <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+meta <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+meta$N <- as.numeric(meta$N)
+meta$Host_Age <- as.numeric(meta$Host_Age)
+meta$host_body_mass_index <- as.numeric(meta$host_body_mass_index)
+meta$technical <- paste0(meta$Instrument, "_", meta$X16s_region, "_", meta$LibraryLayout, "_", meta$geo_loc_name_country_continent, "_", meta$smoking_status)
+meta$Disease <- factor(meta$Disease, levels = c("UC", "CD", "HC"))
+
+res_CD <- data.frame()
+res_CD_zi <- data.frame()
+for (i in colnames(genera)){
+  f <- zeroinfl(genera[,i]~technical+Host_Age+host_sex+host_body_mass_index+Disease, offset = log(N), data=meta, dist="negbin")
+  f1 <- summary(f)
+  
+  #Count part
+  f2 <- f1$coefficients$count
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD <- rbind(res_CD, f3)
+  
+  #Zero part
+  f2 <- f1$coefficients$zero
+  f3 <- as.data.frame(t(f2["DiseaseCD", ]))
+  f3$bug <- i
+  res_CD_zi <- rbind(res_CD_zi, f3)
+  
+  rm(f, f1, f2, f3)
+}
+
+res_CD$padj <- p.adjust(res_CD$`Pr(>|z|)`, method="BH")
+res_CD_zi$padj <- p.adjust(res_CD_zi$`Pr(>|z|)`, method="BH")
+
+sig_CD <- res_CD %>% filter(padj<0.05)
+sig_CD_zi <- res_CD_zi %>% filter(padj<0.05)
+
+length(unique(c(sig_CD$bug, sig_CD_zi$bug))) #13 significant out of 144-11 = 133
+
+#Those that failed are the same for all:
+res_CD$bug[which(is.na(res_CD$`Pr(>|z|)`))]
+
+#Save results:
+write.table(res_CD, paste0(path, "results/Single_genus_CD_vs_UC_sensitivity.txt"), col.names=T, row.names=F)
+write.table(res_CD_zi, paste0(path, "results/Single_genus_CD_vs_UC_ZI_sensitivity.txt"), col.names=T, row.names=F)
+
+```
+
+ANCOM-BC:
+```{r}
+sample_data(ps_reduced)$technical <- paste0(sample_data(ps_reduced)$Instrument, "_", sample_data(ps_reduced)$X16s_region, "_", sample_data(ps_reduced)$LibraryLayout, "_", sample_data(ps_reduced)$geo_loc_name_country_continent, "_", sample_data(ps_reduced)$smoking_status)
+sample_data(ps_reduced)$Disease <- factor(sample_data(ps_reduced)$Disease, levels = c("UC", "CD", "HC"))
+
+res_ancom <- ancombc(ps_reduced, formula= "technical+Host_Age+host_sex+host_body_mass_index+Disease", p_adj_method="BH", group="Disease", struc_zero=T, neg_lb=F, zero_cut=1)
+
+sum(res_ancom$res$q_val$DiseaseCD< 0.05) #0 significant
+
+#Results: Combine beta value with se, p and adjusted p value:
+res_CD <- data.frame(bug = row.names(res_ancom$res$beta), beta = res_ancom$res$beta$DiseaseCD, SE = res_ancom$res$se$DiseaseCD, p_val = res_ancom$res$p_val$DiseaseCD, q_val = res_ancom$res$q_val$DiseaseCD)
+
+write.table(res_CD,  paste0(path, "results/ANCOM_CD_vs_UC_sensitivity.txt"), col.names=T, row.names=F)
+```
+
+MaAsLin2:
+```{r}
+
+#samples as rows, factorize!
+input_data <- as.data.frame(as.matrix(otu_table(ps_reduced)))
+input_metadata <- as.data.frame(as.matrix(sample_data(ps_reduced)))
+input_metadata$Host_Age <- as.numeric(input_metadata$Host_Age)
+input_metadata$host_body_mass_index <- as.numeric(input_metadata$host_body_mass_index)
+input_metadata$technical <- paste0(input_metadata$Instrument, "_", input_metadata$X16s_region, "_", input_metadata$LibraryLayout, "_", input_metadata$geo_loc_name_country_continent, "_", input_metadata$smoking_status)
+input_metadata$Disease <- factor(input_metadata$Disease, levels = c("UC", "CD", "HC"))
+
+setwd(paste0(path, "results/"))
+fit_data = Maaslin2(
+    input_data = input_data, 
+    input_metadata = input_metadata, 
+    output = "MaAsLin2_output_CD_vs_UC_sensitivity", 
+    max_significance = 0.05,
+    transform = "AST",
+    fixed_effects = c("Disease","technical", "Host_Age", "host_sex", "host_body_mass_index"), reference = "Disease,UC", 
+    plot_heatmap = F,
+    plot_scatter = F)
+
+res <- read.csv("MaAsLin2_output_CD_vs_UC_sensitivity/all_results.tsv", sep="\t")
+res <- res %>% filter(metadata == "Disease")
+res <- res %>% filter(value == "CD")
+
+write.table(res, paste0(path, "results/Single_genus_MaAsLin2_CD_vs_UC_sensitivity.txt"), col.names=T, row.names=F)
+```
