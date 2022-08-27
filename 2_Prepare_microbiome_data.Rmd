@@ -28,7 +28,7 @@ path <- "C:/Users/FX76TZ/OneDrive - Aalborg Universitet/Mikrobiom korrelation/"
 ```
 
 
-Read in all ps objects:
+Read in all phyloseq objects:
 ```{r}
 meta_data <- read.csv(paste0(path, "Metadata/Metadata_IBD_full.txt"), sep="\t")
 colnames(meta_data)[1] <- "Run"
@@ -45,11 +45,11 @@ paired_projects <- paired_projects[c(1:4, 6:10, 12:13, 15, 17:29)]
 projects <- unique(c(single_projects, paired_projects))
 
 for (i in single_projects){
-  assign(paste0("ps_count_single_", i), readRDS(paste0("./vol1/single/", i, "/ps_count_", i, ".rds")))
+  assign(paste0("ps_count_single_", i), readRDS(paste0(path, "data/IBD_project/single/ps_count_", i, ".rds")))
 } 
 
 for (i in paired_projects){
-  assign(paste0("ps_count_paired_", i), readRDS(paste0("./vol1/paired/", i, "/ps_count.rds")))
+  assign(paste0("ps_count_paired_", i), readRDS(paste0(path, "data/IBD_project/paired/ps_count_", i, ".rds")))
 } 
 
 ```
@@ -91,8 +91,9 @@ sample_data(ps_count_single_PRJNA316059)$N <- sample_sums(ps_count_single_PRJNA3
 sample_data(ps_count_single_PRJEB13680)$N <- sample_sums(ps_count_single_PRJEB13680)
 sample_data(ps_count_single_PRJEB11419)$N <- sample_sums(ps_count_single_PRJEB11419)
 
+
 for (i in paired_projects){
-  p <- ggplot()+
+   p<- ggplot()+
   geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
   theme_classic()+xlab("Read depth")+ylab("Count")+
   geom_vline(xintercept = 10000, linetype = "dashed")
@@ -137,72 +138,90 @@ paired_5 <- paired_projects[c(1, 11, 17, 20, 23, 25)]
 paired_10 <- paired_projects[c(2:9, 10, 12:16, 18:19, 21:22, 24)]
 
 #New plotting + Remove sample with read depth below 10,000, 5,000, 4,000 or 2,000:
+j <- 1
 for (i in single_10){
-    p <- ggplot()+
+  assign(paste0("p_", j), ggplot()+
   geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
   theme_classic()+xlab("Read depth")+ylab("Count")+
-  geom_vline(xintercept = 10000, linetype = "dashed")+ggtitle(paste0("Single: ", i))
-  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  geom_vline(xintercept = 10000, linetype = "dashed")+ggtitle(paste0("Single: ", i)))
+  #ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  j <- j+1
   
-  assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=10000, eval(parse(text=paste0("ps_count_single_", i)))))
+  #assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=10000, eval(parse(text=paste0("ps_count_single_", i)))))
   
-  saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
+  #saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
  
-  print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
+  #print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
   }
 
 for (i in single_4){
-      p <- ggplot()+
+  assign(paste0("p_", j), ggplot()+
   geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
   theme_classic()+xlab("Read depth")+ylab("Count")+
-  geom_vline(xintercept = 4000, linetype = "dashed")+ggtitle(paste0("Single: ", i))
-  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  geom_vline(xintercept = 4000, linetype = "dashed")+ggtitle(paste0("Single: ", i)))
+  #ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
   
-  assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=4000, eval(parse(text=paste0("ps_count_single_", i)))))
+  j <- j+1
   
-  saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
+  #assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=4000, eval(parse(text=paste0("ps_count_single_", i)))))
   
-  print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
-  }
-for (i in single_2){
-        p <- ggplot()+
-  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
-  theme_classic()+xlab("Read depth")+ylab("Count")+
-  geom_vline(xintercept = 2000, linetype = "dashed")+ggtitle(paste0("Single: ", i))
-  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  #saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
   
-  assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=2000, eval(parse(text=paste0("ps_count_single_", i)))))
-  
-  saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
-  
-  print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
-  }
-for (i in paired_10){
-        p <- ggplot()+
-  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
-  theme_classic()+xlab("Read depth")+ylab("Count")+
-  geom_vline(xintercept = 10000, linetype = "dashed")+ggtitle(paste0("Paired: ", i))
-  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"), width = 3, height = 3)
-  
-  assign(paste0("ps_sub_paired_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))>=10000, eval(parse(text=paste0("ps_count_paired_", i)))))
-  
-  saveRDS(eval(parse(text=paste0("ps_sub_paired_", i))), paste0("./vol1/paired/ps_count_filtered_", i, ".rds"))
-  
-  print(dim(sample_data(eval(parse(text=paste0("ps_sub_paired_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_paired_", i)))))[1])
+  #print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
 }
-for (i in paired_5){
-          p <- ggplot()+
+
+
+for (i in single_2){
+   assign(paste0("p_", j), ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 2000, linetype = "dashed")+ggtitle(paste0("Single: ", i)))
+  #ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_single_", i, ".tiff"), width = 3, height = 3)
+  
+  j <- j+1
+  
+  #assign(paste0("ps_sub_single_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_single_", i))))>=2000, eval(parse(text=paste0("ps_count_single_", i)))))
+  
+  #saveRDS(eval(parse(text=paste0("ps_sub_single_", i))), paste0("./vol1/single/ps_count_filtered_", i, ".rds"))
+  
+  #print(dim(sample_data(eval(parse(text=paste0("ps_sub_single_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_single_", i)))))[1])
+}
+
+for (i in paired_10){
+  assign(paste0("p_", j), ggplot()+
   geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
   theme_classic()+xlab("Read depth")+ylab("Count")+
-  geom_vline(xintercept = 5000, linetype = "dashed")+ggtitle(paste0("Paired: ", i))
-  ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"), width = 3, height = 3)
+  geom_vline(xintercept = 10000, linetype = "dashed")+ggtitle(paste0("Paired: ", i)))
+  #ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"), width = 3, height = 3)
   
-  assign(paste0("ps_sub_paired_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))>=5000, eval(parse(text=paste0("ps_count_paired_", i)))))
+  j <- j+1
   
-  saveRDS(eval(parse(text=paste0("ps_sub_paired_", i))), paste0("./vol1/paired/ps_count_filtered_", i, ".rds"))
+  #assign(paste0("ps_sub_paired_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))>=10000, eval(parse(text=paste0("ps_count_paired_", i)))))
   
-  print(dim(sample_data(eval(parse(text=paste0("ps_sub_paired_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_paired_", i)))))[1])
+  #saveRDS(eval(parse(text=paste0("ps_sub_paired_", i))), paste0("./vol1/paired/ps_count_filtered_", i, ".rds"))
+  
+  #print(dim(sample_data(eval(parse(text=paste0("ps_sub_paired_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_paired_", i)))))[1])
+}
+
+for (i in paired_5){
+  assign(paste0("p_", j), ggplot()+
+  geom_histogram(mapping=aes(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))), fill = "lightskyblue1", color="black", bins = 100)+
+  theme_classic()+xlab("Read depth")+ylab("Count")+
+  geom_vline(xintercept = 5000, linetype = "dashed")+ggtitle(paste0("Paired: ", i)))
+  #ggsave(paste0(path, "/illustrations/IBD_project/Read_depth_paired_", i, ".tiff"), width = 3, height = 3)
+  
+  j <- j+1
+  
+  #assign(paste0("ps_sub_paired_", i), prune_samples(sample_sums(eval(parse(text=paste0("ps_count_paired_", i))))>=5000, eval(parse(text=paste0("ps_count_paired_", i)))))
+  
+  #saveRDS(eval(parse(text=paste0("ps_sub_paired_", i))), paste0("./vol1/paired/ps_count_filtered_", i, ".rds"))
+  
+  #print(dim(sample_data(eval(parse(text=paste0("ps_sub_paired_", i)))))[1] / dim(sample_data(eval(parse(text=paste0("ps_count_paired_", i)))))[1])
   }
+
+
+ggarrange(p_1, p_2, p_3, p_4, p_5, p_6, p_7, p_8, p_9, p_10, p_11, p_12, p_13, p_14, p_15, p_16, p_17, p_18, p_19, p_20, p_21, p_22, p_23, p_24, p_25, p_26, p_27, p_28, p_29, p_30, p_31, p_32, p_33, p_34, p_35, p_36, p_37, p_38, p_39, p_40, p_41, p_42, p_43, p_44, p_45, p_46, p_47, nrow = 16, ncol=3)
+p_1
 
 #Transform into relab and save:
 for (i in paired_projects){
@@ -469,21 +488,25 @@ ps_total_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
 #Based on Phylum
 temp <- ps_total_relab %>% tax_glom(taxrank = "Phylum") %>% psmelt() %>% filter(Abundance > 0.02)
 
-ggplot(temp)+
+p1 <- ggplot(temp)+
   geom_bar(aes(x=Sample, y= Abundance, fill = Phylum), stat = "identity", position = "stack")+
-  xlab("Participants")+theme_classic()+ theme(axis.text.x=element_blank()) 
+  xlab("Participants")+theme_classic()+ theme(axis.text.x=element_blank(), text = element_text(family = "sans", size = 8))
 
 #Based on Genus:
 temp <- ps_total_relab %>% tax_glom(taxrank = "Genus") %>% psmelt()%>% filter(Abundance > 0.02)
-ggplot(temp)+
+p2 <- ggplot(temp)+
   geom_bar(aes(x=Sample, y= Abundance, fill=Genus), stat = "identity", position = "stack")+
-  xlab("Participants")+theme_classic()+ theme(axis.text.x=element_blank())+theme(legend.position = "none")
+  xlab("Participants")+theme_classic()+ theme(axis.text.x=element_blank(), text = element_text(family = "sans", size = 8))+theme(legend.position = "none")
+                                              
+p_total <- ggarrange (p1, p2, nrow=2, ncol =1, labels= c("A)", "B)"), font.label = list(size=10, family="sans"))
+
+ggsave(p_total, filename = paste0(path, "illustrations/IBD_project/FigureS2.tiff"), width = 174, height = 200, units = "mm", dpi=300)
 ```
 
 
 ## Calculation of beta diversity
 ```{r cache = TRUE}
-#ps_total_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
+ps_total_relab <- readRDS(paste0(path, "data/IBD_project/ps_total_relab.rds"))
 #Bray Curtis: 
 beta_div_relab_bray = phyloseq::distance(ps_total_relab, method='bray')
 beta_div_relab_bray %>% as.vector %>% summary
@@ -548,6 +571,7 @@ ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Layout))+
 ## Overview of samples
 ```{r}
 df <- as.data.frame(as.matrix(sample_data(ps_total_relab)))
+df <- df %>% filter(!(BioProject %in% c("PRJNA606913", "PRJNA313074", "PRJNA436359", "PRJNA761255")))
 
 #Check stats:
 table(df$Disease, useNA = "always")
@@ -582,56 +606,30 @@ table(df_UC$smoking_status, useNA = "always")
 table(df_CD$smoking_status, useNA = "always")
 table(df_HC$smoking_status, useNA = "always")
 table(df_NA$smoking_status, useNA = "always")
-
+df$Disease <- ifelse(df$Disease=="HC", "HI", df$Disease)
 
 #Make plots:
+colorBlindGrey8   <- c("#009E73", "#56B4E9", "#E69F00", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+colorBlindGrey7   <- c("#009E73", "#56B4E9", "#E69F00", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
 df_projects <- df %>% dplyr::group_by(X16s_region, Instrument) %>% summarise(samples = n(), projects = length(unique(BioProject)))
 df_projects$X16s_region
 df_projects[6, "X16s_region"] <- "All"
 
 p1 <- ggplot(data=df_projects)+
-  geom_bar(aes(x=reorder(X16s_region,-projects, sum), y=projects, fill=Instrument), stat="identity")+xlab("16S V-region")+ylab("Studies")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  geom_bar(aes(x=reorder(X16s_region,-projects, sum), y=projects, fill=Instrument), stat="identity")+xlab("16S V-region")+ylab("Number of studies")+theme_classic()+ theme(text = element_text(family = "sans", size = 8), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), axis.title.x = element_text(vjust=-1))+scale_fill_manual(values=rev(colorBlindGrey7))
+p1
 
-ggplot(data=df_projects)+
-  geom_bar(aes(x=reorder(X16s_region,-samples), y=samples), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()
-
-df_projects <- df %>% dplyr::group_by(X16s_region, BioProject) %>% summarise(samples = n())
-df_projects$X16s_region
-df_projects[10, "X16s_region"] <- "All"
-
-ggplot(data=df_projects)+
-  geom_bar(aes(x=reorder(X16s_region,-samples, sum), y=samples, fill=BioProject), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()+theme(legend.position = "none")
-
-df_projects <- df %>% dplyr::group_by(X16s_region, Disease) %>% summarise(samples = n())
-df_projects$X16s_region
-df_projects[8:9, "X16s_region"] <- "All"
-
-p3 <- ggplot(data=df_projects)+
-  geom_bar(aes(x=reorder(X16s_region,-samples, sum), y=samples, fill=Disease), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-df_projects <- df %>% dplyr::group_by(X16s_region, Instrument) %>% summarise(samples = n())
-df_projects$X16s_region
-df_projects[6, "X16s_region"] <- "All"
-
-ggplot(data=df_projects)+
-  geom_bar(aes(x=reorder(X16s_region,-samples, sum), y=samples, fill=Instrument), stat="identity")+xlab("16S V-region")+ylab("Total samples")+theme_classic()
 
 df_disease <- df %>% dplyr::group_by(Disease, host_sex) %>% summarise(samples = n())
+df_disease$Disease <- ifelse(df_disease$Disease=="HC", "HI", df_disease$Disease)
 
+p2 <- ggplot(data=df_disease)+
+  geom_bar(aes(x=reorder(Disease,-samples, sum), y=samples, fill=host_sex), stat="identity")+xlab("Disease status")+ylab("Total samples")+theme_classic()+labs(fill="Sex")+ theme(text = element_text(family = "sans", size = 8))+scale_fill_manual(values=colorBlindGrey8)
+p2
+p_total <- ggarrange(p1, p2, labels = c("A)", "B)"), font.label = list(size=10, family="sans"), widths = c(1, 0.6))
+p_total
 
-p4 <- ggplot(data=df_disease)+
-  geom_bar(aes(x=reorder(Disease,-samples, sum), y=samples, fill=host_sex), stat="identity")+xlab("Disease status")+ylab("Total samples")+theme_classic()+labs(fill="Gender")
-
-df_instrument <-  df %>% dplyr::group_by(Instrument, LibraryLayout) %>% summarise(samples = n())
-p2 <- ggplot(data=df_instrument)+
-  geom_bar(aes(x=reorder(Instrument,-samples, sum), y=samples, fill=LibraryLayout), stat="identity")+xlab("Instrument")+ylab("Total samples")+theme_classic()+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+labs(fill="Layout")
-
-ggarrange(p1, p2, p3, p4, labels=c("A", "B", "C", "D"))
-q1 <- p1+scale_fill_grey(start = 0, end = .9, na.value="black")
-q2 <- p2+ scale_fill_grey(start = 0.2, end = .7, na.value="black")
-q3 <- p3+ scale_fill_grey(start = 0.3, end = .9, na.value="black")
-q4 <- p4+ scale_fill_grey(start = 0.5, end = .7, na.value="black")
-ggarrange(q1, q2, q3, q4, labels=c("A", "B", "C", "D"))
-
+ggsave(p_total, filename = paste0(path, "illustrations/IBD_project/Figure1.tiff"), width = 174, units = "mm", dpi=300)
 ```
 

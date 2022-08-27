@@ -31,6 +31,7 @@ df <- df %>% filter(sample_type %in% c("stool", "Stool", "feces"))
 
 table(df$ibd_diagnosis_refined)
 
+#Remove individuals with other diseases 
 hc <- df %>% filter(ibd == "I do not have this condition") %>% filter(liver_disease == "I do not have this condition") %>% filter(ibs == "I do not have this condition") %>% filter(migraine == "I do not have this condition") %>% filter(appendix_removed %in% c("false", "No")) %>% filter(asd == "I do not have this condition") %>% filter(autoimmune == "I do not have this condition")%>% filter(tonsils_removed %in% c("false", "No"))%>% filter(diabetes == "I do not have this condition") %>% filter(antibiotic_history == "I have not taken antibiotics in the past year.") %>% filter(!(cancer_treatment %in% c("Chemotherapy", "Radiation therapy", "Surgery only"))) %>% filter(skin_condition == "I do not have this condition") %>% filter(thyroid == "I do not have this condition")%>% filter(add_adhd == "I do not have this condition")%>% filter(asd == "I do not have this condition") %>% filter(fungal_overgrowth == "I do not have this condition") %>% filter(gluten != "I was diagnosed with celiac disease") %>% filter(gluten != "I was diagnosed with gluten allergy (anti-gluten IgG), but not celiac disease")%>% filter(clinical_condition == "I do not have this condition") %>% filter(!(pregnant %in% c("Yes", "true")))
 
 cd <- df %>% filter(ibd_diagnosis_refined %in% c("Colonic Crohn's Disease", "Ileal and Colonic Crohn's Disease", "Ileal Crohn's Disease"))

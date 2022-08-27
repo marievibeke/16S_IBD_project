@@ -53,15 +53,20 @@ Test whether the number of detected ASVs and genera are depending on these featu
 ```{r}
 #Remove the samples also removed from the ps object due to less than 2000 genus reads pr. sample:
 alpha_div_ASV <- alpha_div_ASV %>% filter(Run %in% sample_data(ps_count)$Run)
+alpha_div_ASV <- alpha_div_ASV %>% filter(!(BioProject %in% c("PRJNA606913", "PRJNA313074", "PRJNA436359", "PRJNA761255")))
 
 #Check whether data should be transformed:
 ggplot(alpha_div_ASV)+
   geom_histogram(aes(x=Chao1))+theme_classic()+ylab("Count")
-ggplot(alpha_div_ASV)+
-  geom_histogram(aes(x=log(Chao1+1)))+theme_classic()+ylab("Count")+xlab("Chao1 - log transformed")
+p1 <- ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=log(Chao1+1)))+theme_classic()+ylab("Count")+xlab("Chao1 - log transformed")+theme(text = element_text(family = "sans", size = 8))
 
-ggplot(alpha_div_ASV)+
-  geom_histogram(aes(x=Shannon))+theme_classic()+ylab("Count")
+p2 <- ggplot(alpha_div_ASV)+
+  geom_histogram(aes(x=Shannon))+theme_classic()+ylab("Count")+theme(text = element_text(family = "sans", size = 8))
+
+p_total <- ggarrange(p1, p2, labels = c("A)", "B)"), font.label = list(size=10, family="sans"))
+
+ggsave(p_total, filename = paste0(path, "illustrations/IBD_project/FigureS3.tiff"), width = 174, units = "mm", dpi=300)
 
 alpha_div_ASV$Chao1_transformed <- log(alpha_div_ASV$Chao1 +1)
 
@@ -79,12 +84,21 @@ ggplot(alpha_div_ASV)+
 
 alpha_div_ASV$N_transformed <- log(alpha_div_ASV$N+1)
 
+#Check how many outliers of N:
+check <- alpha_div_ASV %>% filter(!is.na(Disease)&!is.na(Host_Age)&!is.na(host_sex)&!is.na(geo_loc_name_country_continent))
+
+sum(check$N_transformed>mean(check$N_transformed)+3*sd(check$N_transformed)| check$N_transformed<mean(check$N_transformed)-3*sd(check$N_transformed))
+8/2518
+
+sum(check$N>mean(check$N)+3*sd(check$N)| check$N<mean(check$N)-3*sd(check$N))
+48/2518
+
 #Remove mean +- 3*SD - alpha diversity:
 alpha_sub_Chao1 <- alpha_div_ASV %>% filter(Chao1_transformed < mean(alpha_div_ASV$Chao1_transformed)+3*sd(alpha_div_ASV$Chao1_transformed)) %>% filter(Chao1_transformed > mean(alpha_div_ASV$Chao1_transformed)-3*sd(alpha_div_ASV$Chao1_transformed)) 
-#5394 samples
+#5339 samples
 
 alpha_sub_Shannon <- alpha_div_ASV %>% filter(Shannon < mean(alpha_div_ASV$Shannon)+3*sd(alpha_div_ASV$Shannon)) %>% filter(Shannon > mean(alpha_div_ASV$Shannon)-3*sd(alpha_div_ASV$Shannon)) 
-#5399 samples
+#5347 samples
 
 
 # Test all technical features together in a linear model:
@@ -210,7 +224,6 @@ f_1 <- aov(f_asv)
 car::Anova(f_1, type = 2)
 sum(!is.na(alpha_sub_Shannon$smoking_status)) #1812 samples
 
-
 ```
 
 
@@ -296,40 +309,51 @@ project_list <- read.csv(paste0(path, "Metadata/Project_list.txt"), sep="\t")
 alpha_sub_Chao1 <- merge(alpha_sub_Chao1, project_list, by.x="BioProject", by.y="Project")
 alpha_sub_Shannon <- merge(alpha_sub_Shannon, project_list, by.x="BioProject", by.y="Project")
 
-alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("HC", "CD", "UC"))
-alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("HC", "CD", "UC"))
+alpha_sub_Chao1$Disease1 <- ifelse(alpha_sub_Chao1$Disease=="HC", "HI", ifelse(alpha_sub_Chao1$Disease=="CD", "CD", "UC"))
+alpha_sub_Shannon$Disease1 <- ifelse(alpha_sub_Shannon$Disease=="HC", "HI", ifelse(alpha_sub_Shannon$Disease=="CD", "CD", "UC"))
 
-ggplot(data=alpha_sub_Chao1)+
-  geom_boxplot(aes(x=Author, y=Chao1_transformed, color=Disease))+theme_classic() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("")+ylab("Chao1 (log transformed)")
+alpha_sub_Chao1$Disease1 <- factor(alpha_sub_Chao1$Disease1, levels = c("HI", "UC", "CD"))
+alpha_sub_Shannon$Disease1 <- factor(alpha_sub_Shannon$Disease1, levels = c("HI", "UC", "CD"))
+
+Chao1_sub <- alpha_sub_Chao1 %>% filter(!is.na(Disease)&!is.na(Host_Age)&!is.na(host_sex)&!is.na(geo_loc_name_country_continent))
+
+Shannon_sub <- alpha_sub_Shannon %>% filter(!is.na(Disease)&!is.na(Host_Age)&!is.na(host_sex)&!is.na(geo_loc_name_country_continent))
+
+colorBlindGrey8   <- c("#009E73", "#56B4E9", "#E69F00", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
+
+
+p1 <- ggplot(data=Chao1_sub)+
+  geom_boxplot(aes(x=Author, y=Chao1_transformed, color=Disease1), position = position_dodge(preserve = "single"))+theme_classic() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), text = element_text(family = "sans", size = 8))+xlab("")+ylab("Chao1 (log transformed)")+labs(color="Disease")+scale_color_manual(values=colorBlindGrey8)
+
 
 ggplot(data=alpha_sub_Shannon)+
-  geom_boxplot(aes(x=Author, y=Shannon, color=Disease))+theme_classic() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("")
+  geom_boxplot(aes(x=Author, y=Shannon, color=Disease1))+theme_classic() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("")
 
 # Not divided by projects:
-alpha_sub_Chao1$Disease <- factor(alpha_sub_Chao1$Disease, levels = c("HC", "UC", "CD"))
-alpha_sub_Shannon$Disease <- factor(alpha_sub_Shannon$Disease, levels = c("HC", "UC", "CD"))
+Chao1_sub$Disease1 <- factor(Chao1_sub$Disease1, levels = c("HI", "UC", "CD"))
+Shannon_sub$Disease1 <- factor(Shannon_sub$Disease1, levels = c("HI", "UC", "CD"))
 
 p_val_ref <- tibble::tribble(
   ~group1, ~group2, ~p.adj, ~y.position, 
-  "HC", "CD", "< 2e-16", 8.8, 
-  "HC", "UC", "< 2e-16", 8.2,
-  "CD", "UC", "1.3e-4", 8.2
+  "HI", "CD", "< 2e-16", 7.4, 
+  "HI", "UC", "< 2e-16", 7.0,
+  "CD", "UC", "1.3e-4", 7.0
 )
 
-p1 <- ggplot(data=alpha_sub_Chao1 %>% filter(!is.na(Disease)))+
-  geom_boxplot(aes(x=Disease, y=Chao1_transformed, color=Disease))+theme_classic()+ theme(legend.position="none")+xlab("") + ylab("Chao1 richness (log transformed)")+add_pvalue(p_val_ref)#+ scale_color_grey(start = 0.1, end = .8, na.value="black")
+p2_1 <- ggplot(data=Chao1_sub)+
+  geom_boxplot(aes(x=Disease1, y=Chao1_transformed, color=Disease1))+theme_classic()+ theme(legend.position="none")+xlab("") + ylab("Chao1 richness (log transformed)")+add_pvalue(p_val_ref, fontfamily = "sans", label.size = 2.3)+scale_color_manual(values=colorBlindGrey8)+theme(text = element_text(family = "sans", size = 8))
 
 p_val_ref2 <- tibble::tribble(
   ~group1, ~group2, ~p.adj, ~y.position, 
-  "HC", "CD", "4.35e-13", 8, 
-  "HC", "UC", "5.03e-06", 7.4,
-  "CD", "UC", "0.364", 7.4
+  "HI", "CD", "4.4e-13", 7.6, 
+  "HI", "UC", "5.0e-06", 7,
+  "CD", "UC", "0.364", 7
 )
 
-p2 <- ggplot(data=alpha_sub_Shannon %>% filter(!is.na(Disease)))+
-  geom_boxplot(aes(x=Disease, y=Shannon, color=Disease))+theme_classic()+ theme(legend.position="none")+xlab("") + ylab("Shannon diversity")+add_pvalue(p_val_ref2)#+ scale_color_grey(start = 0.1, end = .8, na.value="black")
+p2_2 <- ggplot(data=Shannon_sub)+
+  geom_boxplot(aes(x=Disease1, y=Shannon, color=Disease1))+theme_classic()+ theme(legend.position="none")+xlab("") + ylab("Shannon diversity")+add_pvalue(p_val_ref2, fontfamily = "sans", label.size = 2.3)+scale_color_manual(values=colorBlindGrey8)+theme(text = element_text(family = "sans", size = 8))
 
-ggarrange(p1, p2)
+p2 <- ggarrange(p2_1, p2_2)
 ``` 
 
 
@@ -587,11 +611,12 @@ BRAY_NMDS_relab$stress #0.2046969
 
 data.scores = as.data.frame(scores(BRAY_NMDS_relab))
 data.scores$Disease <- sample_data(ps_relab_sub)$Disease
-data.scores$Disease <- factor(data.scores$Disease, levels = c("HC", "CD", "UC"))
+data.scores$Disease <- ifelse(data.scores$Disease=="HC", "HI", data.scores$Disease)
+data.scores$Disease <- factor(data.scores$Disease, levels = c("HI", "UC", "CD"))
 
-p1 <- ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Disease))+
-  geom_point(size=0.7)+theme_classic()+stat_ellipse(linetype="dashed", size=2)+ggtitle("Bray Curtis dissimilarity")
-p1
+p3_1 <- ggplot(data=data.scores, aes(x=NMDS1, y=NMDS2, color=Disease))+
+  geom_point(size=0.7)+theme_classic()+stat_ellipse(linetype="dashed", size=1.5)+ggtitle("Bray-Curtis dissimilarity")+theme(text = element_text(family = "sans", size = 8))+scale_color_manual(values = colorBlindGrey8)
+
 
 #Jaccard:
 data.scores_jac <- read.csv( paste0(path, "data/IBD_project/beta_plot_Jaccard.txt"))
@@ -600,15 +625,27 @@ JAC_NMDS_relab$stress #0.1963084
 
 data.scores_jac = as.data.frame(scores(JAC_NMDS_relab))
 data.scores_jac$Disease <- sample_data(ps_relab_sub)$Disease
-data.scores_jac$Disease <- factor(data.scores_jac$Disease, levels = c("HC", "CD", "UC"))
+data.scores_jac$Disease <- ifelse(data.scores_jac$Disease=="HC", "HI", data.scores_jac$Disease)
+data.scores_jac$Disease <- factor(data.scores_jac$Disease, levels = c("HI", "UC", "CD"))
 
-p2 <- ggplot(data=data.scores_jac, aes(x=NMDS1, y=NMDS2, color=Disease))+
-  geom_point(size=0.7)+theme_classic()+stat_ellipse(linetype="dashed", size=2)+ggtitle("Jaccard index")
-
-ggarrange(p1, p2, common.legend =T, legend = "right")
+p3_2 <- ggplot(data=data.scores_jac, aes(x=NMDS1, y=NMDS2, color=Disease))+
+  geom_point(size=0.7)+theme_classic()+stat_ellipse(linetype="dashed", size=1.5)+ggtitle("Jaccard dissimilarity")+theme(text = element_text(family = "sans", size = 8))+scale_color_manual(values = colorBlindGrey8)
 
 
 write.csv(data.scores, paste0(path, "data/IBD_project/beta_plot_BrayCurtis.txt"), quote = F)
 write.csv(data.scores_jac, paste0(path, "data/IBD_project/beta_plot_Jaccard.txt"), quote = F)
+
+data.scores <- read.csv(paste0(path, "data/IBD_project/beta_plot_BrayCurtis.txt"))
+data.scores_jac <- read.csv(paste0(path, "data/IBD_project/beta_plot_Jaccard.txt"))
+```
+
+```{r}
+p_top <- ggarrange(p1, p2, ncol=2, labels = c("A)", "B)"), font.label = list(size=10, family="sans"), widths = c(1, 0.8))
+
+p_bottom <- ggarrange(p3_1, p3_2, common.legend =T, legend = "right", labels="C)", font.label = list(size=10, family="sans"))
+
+p_total <- ggarrange(p_top, p_bottom, nrow=2)
+
+ggsave(p_total, filename = paste0(path, "illustrations/IBD_project/Figure2.tiff"), width = 174, height = 145, units = "mm", dpi=300)
 ```
 

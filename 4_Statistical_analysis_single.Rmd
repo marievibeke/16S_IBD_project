@@ -308,115 +308,27 @@ sig_total <- sig_total %>% filter(!is.na(padj))
 sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
 sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
 
-ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+#Only genus name for the plot:
+genera_df <- sig_total %>% filter(part %in% c("Crohn's disease, ANCOM-BC", "Ulcerative colitis, ANCOM-BC"))
+taxes <- as.data.frame(as.matrix(tax_table(ps_relab)))
+head(taxes)
+taxes$bug <- row.names(taxes)
+genera_df <- left_join(genera_df, taxes, by="bug")
+genera_df <- genera_df %>% select(bug2, Genus)
+unique(genera_df$Genus)
+sig_total <- merge(sig_total, genera_df, by.x="bug2", by.y="bug2")
+head(sig_total)
+
+f4 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_tile(aes(fill=padj))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
 
-```
 
-Make NMDS showing the "chosen ones"
-```{r}
-library(vegan)
-ps_relab <- subset_samples(ps_relab_reduced, !is.na(Disease))
-ps_relab <- subset_samples(ps_relab, !is.na(geo_loc_name_country))
-ps_relab <- subset_samples(ps_relab, !is.na(host_sex))
-ps_relab <- subset_samples(ps_relab, !is.na(Host_Age))
+ggsave(f4, filename = paste0(path, "illustrations/IBD_project/FigureS4.tiff"), width = 174, height = 230, units = "mm", dpi=300)
 
-#CD:
-#Bray Curtis: 
-test <- res_CD %>% filter(part =="Crohn's disease, NB")
-
-ps_CD <- subset_samples(ps_relab, Disease !="UC")
-ps_CD <- subset_samples(ps_CD, Run != "ERR162916")
-my_subset <- as.data.frame(as.matrix(otu_table(ps_CD)))
-my_subset <- my_subset[, test$bug]
-
-ps_CD <- merge_phyloseq(otu_table(my_subset, taxa_are_rows =F), tax_table(ps_CD), sample_data(ps_CD))
-
-set.seed(0)
-BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_CD), k=2,trymax=30, distance="bray")
-BRAY_NMDS_relab$stress #0.2168137
-
-data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
-data_scores$Disease <- sample_data(ps_CD)$Disease
-data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "CD"))
-data_scores$Run <- row.names(data_scores)
-species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
-species_scores$species <- rownames(species_scores)
-species_scores$species <- gsub(".*_","",species_scores$species)
-
-ggplot(data_scores) +
-  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
-  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
-  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
-
-#Jaccard
-set.seed(0)
-BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_CD), k=2,trymax=30, distance="jaccard", binary=T)
-BRAY_NMDS_relab$stress #0.1822771
-
-data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
-data_scores$Disease <- sample_data(ps_CD)$Disease
-data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "CD"))
-data_scores$Run <- row.names(data_scores)
-species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
-species_scores$species <- rownames(species_scores)
-species_scores$species <- gsub(".*_","",species_scores$species)
-
-ggplot(data_scores) +
-  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
-  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
-  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
-
-#UC:
-#Bray Curtis: 
-test <- res_UC %>% filter(part =="Ulcerative colitis, NB")
-
-ps_UC <- subset_samples(ps_relab, Disease !="CD")
-my_subset <- as.data.frame(as.matrix(otu_table(ps_UC)))
-my_subset <- my_subset[, test$bug]
-
-ps_UC <- merge_phyloseq(otu_table(my_subset, taxa_are_rows =F), tax_table(ps_UC), sample_data(ps_UC))
-
-set.seed(0)
-BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_UC), k=2,trymax=30, distance="bray")
-BRAY_NMDS_relab$stress #0.2029482
-
-data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
-data_scores$Disease <- sample_data(ps_UC)$Disease
-data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "UC"))
-data_scores$Run <- row.names(data_scores)
-species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
-species_scores$species <- rownames(species_scores)
-species_scores$species <- gsub("Prevotella_","Prevotella.",species_scores$species)
-species_scores$species <- gsub(".*_","",species_scores$species)
-
-ggplot(data_scores) +
-  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
-  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
-  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
-
-#Jaccard
-set.seed(0)
-BRAY_NMDS_relab=vegan::metaMDS(otu_table(ps_UC), k=2,trymax=30, distance="jaccard", binary=T)
-BRAY_NMDS_relab$stress #0.1928975
-
-data_scores <- as.data.frame(scores(BRAY_NMDS_relab))
-data_scores$Disease <- sample_data(ps_UC)$Disease
-data_scores$Disease <- factor(data_scores$Disease, levels = c("HC", "UC"))
-data_scores$Run <- row.names(data_scores)
-species_scores <- as.data.frame(scores(BRAY_NMDS_relab, "species"))
-species_scores$species <- rownames(species_scores)
-species_scores$species <- gsub("Prevotella_","Prevotella.",species_scores$species)
-species_scores$species <- gsub(".*_","",species_scores$species)
-
-ggplot(data_scores) +
-  geom_text(data = species_scores, aes(x = NMDS1, y = NMDS2, label = species), alpha = 0.5, size = 3) +
-  geom_point( aes(x = NMDS1, y = NMDS2, color = Disease), size = 0.7) +
-  theme_classic()#+stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Disease), linetype="dashed", size=2)
 ```
 
 
@@ -711,12 +623,23 @@ sig_total <- sig_total %>% filter(!is.na(padj))
 sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
 sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
 
-ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+#Only genus name in plots:
+genera_df <- sig_total %>% filter(part %in% c("Crohn's disease, ANCOM-BC", "Ulcerative colitis, ANCOM-BC"))
+genera_df <- left_join(genera_df, taxes, by="bug")
+genera_df <- genera_df %>% select(bug2, Genus)
+
+sig_total <- merge(sig_total, genera_df, by.x="bug2", by.y="bug2")
+head(sig_total)
+
+f6 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_tile(aes(fill=padj))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+
+
+ggsave(f6, filename = paste0(path, "illustrations/IBD_project/FigureS6.tiff"), width = 174, height = 160, units = "mm", dpi=300)
 ```
 
 ### Sensitivity 2: Include BMI 
@@ -1366,12 +1289,23 @@ sig_total <- sig_total %>% filter(!is.na(padj))
 sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
 sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
 
-ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+#Only genus name in plots:
+genera_df <- sig_total %>% filter(part %in% c("Crohn's disease, ANCOM-BC", "Ulcerative colitis, ANCOM-BC"))
+genera_df <- left_join(genera_df, taxes, by="bug")
+genera_df <- genera_df %>% select(bug2, Genus)
+
+sig_total <- merge(sig_total, genera_df, by.x="bug2", by.y="bug2")
+head(sig_total)
+
+f5 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_tile(aes(fill=padj))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+
+
+ggsave(f5, filename = paste0(path, "illustrations/IBD_project/FigureS5.tiff"), width = 174, height = 160, units = "mm", dpi=300)
 ```
 
 
@@ -1555,12 +1489,23 @@ sig_total <- sig_total %>% filter(!is.na(padj))
 sig_total$sign <- ifelse(sig_total$Estimate2 < 0, "-", "+")
 sig_total$padj <- ifelse(sig_total$padj>= 0.05, NA, sig_total$padj)
 
-ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(bug2)))+
+#Only genus name in plots:
+genera_df <- sig_total %>% filter(part =="ANCOM-BC")
+genera_df <- left_join(genera_df, taxes, by="bug")
+genera_df <- genera_df %>% select(bug2, Genus)
+
+sig_total <- merge(sig_total, genera_df, by.x="bug2", by.y="bug2")
+head(sig_total)
+
+f7 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_tile(aes(fill=padj))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+
+
+ggsave(f7, filename = paste0(path, "illustrations/IBD_project/FigureS7.tiff"), width = 114, height = 140, units = "mm", dpi=300)
 
 ```
 
