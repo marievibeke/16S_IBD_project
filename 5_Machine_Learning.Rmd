@@ -634,10 +634,10 @@ colorBlindGrey8   <- c("#009E73", "#56B4E9", "#E69F00", "#F0E442", "#0072B2", "#
 
 #Plot together the best10 variable importance:
 p2_1 <- ggplot(best_10_CD)+
-  geom_col(aes(x=MeanDecreaseGini, y=reorder(Genus, MeanDecreaseGini), fill=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("Crohn's disease")+ scale_fill_manual(values=c("#009E73", "#D55E00"))+theme(legend.position = "none")+xlim(c(0,7))+theme(text = element_text(family = "sans", size = 8))
+  geom_col(aes(x=MeanDecreaseGini, y=reorder(Genus, MeanDecreaseGini), fill=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("Crohn's disease")+ scale_fill_manual(values=c("#009E73", "#D55E00"))+theme(legend.position = "none")+xlim(c(0,7))+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 p2_2 <- ggplot(best_10_UC)+
-  geom_col(aes(x=MeanDecreaseGini, y=reorder(Genus, MeanDecreaseGini), fill=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("Ulcerative colitis")+ scale_fill_manual(values=c("#009E73", "#D55E00"))+theme(legend.position = "none")+xlim(c(0,7))+theme(text = element_text(family = "sans", size = 8))
+  geom_col(aes(x=MeanDecreaseGini, y=reorder(Genus, MeanDecreaseGini), fill=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ggtitle("Ulcerative colitis")+ scale_fill_manual(values=c("#009E73", "#D55E00"))+theme(legend.position = "none")+xlim(c(0,7))+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 #Combine all plots:
 p_top <- ggarrange(p1_1, p1_2, labels=c("A)", "B)"), font.label = list(size=10, family="sans")) 
@@ -670,7 +670,7 @@ best_10_new$sign <- c("-", "-", "-", "-", "-", "-", "+", "+", "-", "-")
 
 #Plot together the best10 variable importance:
 p4_2 <- ggplot(best_10_new)+
-  geom_col(aes(x=MeanDecreaseGini, y=reorder(Genus, MeanDecreaseGini), fill=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ scale_fill_manual(values=c("#009E73", "#D55E00"))+theme(legend.position = "none")+theme(text = element_text(family = "sans", size = 8))
+  geom_col(aes(x=MeanDecreaseGini, y=reorder(Genus, MeanDecreaseGini), fill=sign))+theme_classic()+xlab("Mean decrease in Gini")+ylab("")+ scale_fill_manual(values=c("#009E73", "#D55E00"))+theme(legend.position = "none")+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 p4 <- ggarrange(p4_1, p4_2, labels=c("A)", "B)"), font.label = list(size=10, family="sans"), widths = c(0.7, 1))
 

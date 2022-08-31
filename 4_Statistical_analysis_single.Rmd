@@ -324,7 +324,7 @@ f4 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 
 ggsave(f4, filename = paste0(path, "illustrations/IBD_project/FigureS4.tiff"), width = 174, height = 230, units = "mm", dpi=300)
@@ -636,7 +636,7 @@ f6 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 
 ggsave(f6, filename = paste0(path, "illustrations/IBD_project/FigureS6.tiff"), width = 174, height = 160, units = "mm", dpi=300)
@@ -1302,7 +1302,7 @@ f5 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 
 ggsave(f5, filename = paste0(path, "illustrations/IBD_project/FigureS5.tiff"), width = 174, height = 160, units = "mm", dpi=300)
@@ -1502,7 +1502,7 @@ f7 <- ggplot(data=sig_total, aes(x=part, y=forcats::fct_rev(Genus)))+
   geom_text(aes(label=sign), color="white")+
   scale_fill_gradient(low="blue", high="red")+
   theme_classic()+xlab("")+ylab("")+
-  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8))
+  guides(x =  guide_axis(angle = 90))+ labs(fill="Adjusted p-value")+theme(text = element_text(family = "sans", size = 8), axis.text.y = element_text(face="italic"))
 
 
 ggsave(f7, filename = paste0(path, "illustrations/IBD_project/FigureS7.tiff"), width = 114, height = 140, units = "mm", dpi=300)
